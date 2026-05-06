@@ -162,47 +162,21 @@ def _format_gaps(gaps: list[dict[str, Any]], max_chars: int) -> str:
     return "\n\n".join(blocks) or "(none)"
 
 
-def _judge_prompt(item: dict[str, Any]) -> str:
+def _judge_prompt(item: dict[str, Any], metric_code: str) -> str:
     profile = item.get("profile", {}) or {}
     task = item.get("task", {}) or {}
     system_a = item.get("system_a", {}) or {}
     system_b = item.get("system_b", {}) or {}
-    metrics = "\n".join(
-        f"- {code}: {LIVE_JUDGE_METRIC_RUBRIC[code]}"
-        for code in METRIC_CODES
-    )
-    return f"""Compare System A and System B for this pair.
+    return f"""Compare System A and System B for this pair on exactly ONE metric: {metric_code}.
 
 Return JSON with exactly this shape:
 {{
-  "preferences": {{
-    "SF": "A|B|tie",
-    "PER": "A|B|tie",
-    "APP": "A|B|tie",
-    "VID": "A|B|tie",
-    "LD": "A|B|tie",
-    "FIT": "A|B|tie",
-    "GND": "A|B|tie",
-    "DIV": "A|B|tie",
-    "ANS": "A|B|tie",
-    "CC": "A|B|tie"
-  }},
-  "rationale": {{
-    "SF": "brief reason",
-    "PER": "brief reason",
-    "APP": "brief reason",
-    "VID": "brief reason",
-    "LD": "brief reason",
-    "FIT": "brief reason",
-    "GND": "brief reason",
-    "DIV": "brief reason",
-    "ANS": "brief reason",
-    "CC": "brief reason"
-  }}
+  "preference": "A|B|tie",
+  "rationale": "brief reason"
 }}
 
-Metric definitions:
-{metrics}
+Metric definition:
+- {metric_code}: {LIVE_JUDGE_METRIC_RUBRIC[metric_code]}
 
 Shared profile:
 {json.dumps(profile, ensure_ascii=False, indent=2)}
@@ -244,9 +218,20 @@ def _side_to_backend_pref(side_pref: str, key: dict[str, Any]) -> str | None:
     return None
 
 
-async def _judge_one(
+def _extract_metric_preference(response: dict[str, Any], metric_code: str) -> tuple[str, str]:
+    preference = response.get("preference")
+    rationale = response.get("rationale")
+    if preference is None and isinstance(response.get("preferences"), dict):
+        preference = response["preferences"].get(metric_code)
+    if not isinstance(rationale, str) and isinstance(response.get("rationale"), dict):
+        rationale = response["rationale"].get(metric_code)
+    return str(preference or ""), str(rationale or "")
+
+
+async def _judge_one_metric(
     *,
     pair_id: str,
+    metric_code: str,
     item: dict[str, Any],
     key: dict[str, Any],
     model: str,
@@ -259,26 +244,23 @@ async def _judge_one(
 ) -> dict[str, Any]:
     async with semaphore:
         response = await call_llm_json(
-            user_prompt=_judge_prompt(item),
+            user_prompt=_judge_prompt(item, metric_code),
             system_prompt=SYSTEM_PROMPT,
             temperature=temperature,
             max_tokens=max_tokens,
             model=model,
             **{k: v for k, v in {"binding": binding, "base_url": base_url, "api_key": api_key}.items() if v},
         )
-    preferences = response.get("preferences", {}) or {}
-    backend_preferences: dict[str, str] = {}
-    for code in METRIC_CODES:
-        backend = _side_to_backend_pref(str(preferences.get(code, "")), key)
-        if backend in {"target", "baseline", "tie"}:
-            backend_preferences[code] = backend
+    preference, rationale = _extract_metric_preference(response, metric_code)
+    backend_preference = _side_to_backend_pref(preference, key)
     return {
         "pair_id": pair_id,
+        "metric_code": metric_code,
         "model": model,
         "binding": binding,
-        "side_preferences": {code: str(preferences.get(code, "")) for code in METRIC_CODES},
-        "backend_preferences": backend_preferences,
-        "rationale": response.get("rationale", {}),
+        "side_preference": preference,
+        "backend_preference": backend_preference if backend_preference in {"target", "baseline", "tie"} else "",
+        "rationale": rationale,
         "raw_response": response,
     }
 
@@ -317,6 +299,7 @@ async def run_live_judge(
         print(f"  annotations : {annotations_path}")
         print(f"  package     : {package_path}")
         print(f"  pairs       : {len(pair_ids)}")
+        print(f"  judge calls : {len(pair_ids) * len(METRIC_CODES)} ({len(METRIC_CODES)} metrics per pair)")
         print(f"  concurrency : {max(1, concurrency)}")
         print(f"  max_tokens  : {max_tokens}")
 
@@ -324,34 +307,63 @@ async def run_live_judge(
     started = time.monotonic()
     tasks = {}
     for pair_id in pair_ids:
-        task = asyncio.create_task(
-            _judge_one(
-                pair_id=pair_id,
-                item=package_by_pair[pair_id],
-                key=key_by_pair[pair_id],
-                model=model,
-                binding=binding,
-                base_url=base_url,
-                api_key=api_key,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                semaphore=semaphore,
+        for metric_code in METRIC_CODES:
+            task = asyncio.create_task(
+                _judge_one_metric(
+                    pair_id=pair_id,
+                    metric_code=metric_code,
+                    item=package_by_pair[pair_id],
+                    key=key_by_pair[pair_id],
+                    model=model,
+                    binding=binding,
+                    base_url=base_url,
+                    api_key=api_key,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    semaphore=semaphore,
+                )
             )
-        )
-        tasks[task] = pair_id
+            tasks[task] = (pair_id, metric_code)
 
-    items = []
+    metric_items = []
     completed = 0
     for task in asyncio.as_completed(tasks):
-        item = await task
-        items.append(item)
+        metric_item = await task
+        metric_items.append(metric_item)
         completed += 1
         if verbose:
             elapsed = time.monotonic() - started
-            print(f"  [{completed}/{len(pair_ids)}] judged {item['pair_id']} ({elapsed:.1f}s elapsed)")
-    items.sort(key=lambda row: str(row.get("pair_id", "")))
+            print(
+                f"  [{completed}/{len(tasks)}] judged "
+                f"{metric_item['pair_id']} {metric_item['metric_code']} ({elapsed:.1f}s elapsed)"
+            )
+
+    by_pair: dict[str, dict[str, Any]] = {}
+    for metric_item in metric_items:
+        pair_id = str(metric_item["pair_id"])
+        record = by_pair.setdefault(
+            pair_id,
+            {
+                "pair_id": pair_id,
+                "model": model,
+                "binding": binding,
+                "side_preferences": {},
+                "backend_preferences": {},
+                "rationale": {},
+                "raw_response": {},
+            },
+        )
+        code = str(metric_item["metric_code"])
+        record["side_preferences"][code] = metric_item.get("side_preference", "")
+        if metric_item.get("backend_preference") in {"target", "baseline", "tie"}:
+            record["backend_preferences"][code] = metric_item["backend_preference"]
+        record["rationale"][code] = metric_item.get("rationale", "")
+        record["raw_response"][code] = metric_item.get("raw_response", {})
+
+    items = [by_pair[pair_id] for pair_id in sorted(by_pair)]
     result = {
         "step": "human_alignment_live_llm_judge",
+        "judge_granularity": "per_metric",
         "annotations_path": str(annotations_path),
         "annotation_key_path": str(key_path),
         "annotation_package_path": str(package_path),
@@ -359,12 +371,13 @@ async def run_live_judge(
         "binding": binding or "",
         "base_url": base_url or "",
         "num_pairs_judged": len(items),
+        "num_metric_judgments": len(metric_items),
         "items": items,
     }
     write_json(output_path, result)
     if verbose:
         elapsed = time.monotonic() - started
-        print(f"Live LLM judge done: {len(items)} pairs in {elapsed:.1f}s")
+        print(f"Live LLM judge done: {len(items)} pairs / {len(metric_items)} metric judgments in {elapsed:.1f}s")
         print(f"Live judge JSON: {output_path}")
     return result
 
@@ -421,6 +434,8 @@ def summarize_with_live_judge(
             "binding": binding or "",
             "base_url": base_url or "",
             "num_pairs_judged": judge_result.get("num_pairs_judged", 0),
+            "num_metric_judgments": judge_result.get("num_metric_judgments", 0),
+            "judge_granularity": judge_result.get("judge_granularity", ""),
         },
     )
     if verbose:

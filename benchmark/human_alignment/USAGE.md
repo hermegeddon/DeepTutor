@@ -245,6 +245,7 @@ python3 -m benchmark.human_alignment.plot_alignment \
 ```
 
 现场 LLM judge 只会评 `completed_annotations_all.csv` 中已经有人类标注的 pair。空白 template 行不会触发 LLM 调用。
+每个 pair 会按 10 个 metric 分开调用 LLM，即一次调用只判断一个 metric，再聚合成最终的 per-metric preference。
 
 会额外输出：
 

@@ -187,7 +187,8 @@ Outputs:
 - `annotation_template.csv`: required human preference schema
 - `review_ui.html`: browser-based scoring UI; open it and load `annotation_package.jsonl`
 - `annotation_key.json`: private mapping from annotation IDs to backend/eval files
-- `live_llm_judgments.json`: live LLM A/B/tie preferences and brief rationales
+- `live_llm_judgments.json`: live LLM A/B/tie preferences and brief rationales;
+  live judge calls are run separately for each metric
 - `human_alignment_summary.json/.md`: per-metric DeepTutor preference rates,
   LLM preference rates, agreement, kappa, tie rates, and inter-rater agreement
 - `human_alignment_preference_alignment.svg`: stacked human-vs-LLM preference plot
