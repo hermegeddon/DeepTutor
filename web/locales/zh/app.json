@@ -1649,6 +1649,8 @@
   "guidedLearning.stage.module_test": "模块测试",
   "guidedLearning.stage.review": "复习",
   "guidedLearning.stage.completed": "已完成",
+  "Start learning": "开始学习",
+  "guidedLearning.alreadyHasProgress": "该书已有学习进度，将直接继续学习。",
   "knowledgeType.memory": "记忆型",
   "knowledgeType.concept": "概念型",
   "knowledgeType.procedure": "程序型",

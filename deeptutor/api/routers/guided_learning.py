@@ -68,6 +68,15 @@ class InitModulesRequest(BaseModel):
     modules: list[dict]  # list of LearningModule-compatible dicts
 
 
+class ChapterImport(BaseModel):
+    title: str
+    knowledge_points: list[str] = []
+
+
+class ImportFromBookRequest(BaseModel):
+    chapters: list[ChapterImport]
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
@@ -186,6 +195,32 @@ async def init_modules(book_id: str, body: InitModulesRequest):
     progress.current_kp_index = 0
     # NOTE: init_modules always resets to module 0. For incremental module addition,
     # use the merge logic in LearningService.init_modules() which preserves position.
+    service.save(progress)
+    return {"status": "ok", "module_count": len(modules)}
+
+
+@router.post("/progress/{book_id}/import-from-book")
+async def import_from_book(book_id: str, body: ImportFromBookRequest):
+    if not book_id or ".." in book_id or "/" in book_id or "\\" in book_id or ":" in book_id:
+        raise HTTPException(status_code=400, detail="Invalid book_id")
+    service = get_learning_service()
+    progress = service.get_or_create(book_id)
+    modules = []
+    for i, ch in enumerate(body.chapters):
+        kps = [
+            KnowledgePoint(id=f"{book_id}_ch{i}_kp{j}", name=kp_name, type="concept", module_id=f"{book_id}_ch{i}")
+            for j, kp_name in enumerate(ch.knowledge_points)
+        ]
+        modules.append(LearningModule(
+            id=f"{book_id}_ch{i}",
+            name=ch.title or f"Chapter {i+1}",
+            order=i,
+            pass_threshold=0.7,
+            knowledge_points=kps,
+        ))
+    service.init_modules(progress, modules)
+    progress.current_module_id = modules[0].id if modules else ""
+    progress.current_kp_index = 0
     service.save(progress)
     return {"status": "ok", "module_count": len(modules)}
 

@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Loader2, MessageSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -29,6 +29,8 @@ import {
   progressIsComplete,
   reduceBookEvent,
 } from "@/lib/book-progress";
+
+import { fetchAllProgress, importFromBook } from "@/lib/learning-api";
 
 import BookChatPanel from "./components/BookChatPanel";
 import BookCreator from "./components/BookCreator";
@@ -65,6 +67,7 @@ function BookLoadingText() {
 
 function BookPageInner() {
   const { t } = useTranslation();
+  const router = useRouter();
   const [books, setBooks] = useState<Book[]>([]);
   const [loadingBooks, setLoadingBooks] = useState(false);
   const [view, setView] = useState<View>("list");
@@ -229,6 +232,26 @@ function BookPageInner() {
     }
     await refreshBooks();
   };
+
+  const handleLearn = useCallback(async (book: Book) => {
+    try {
+      const allProgress = await fetchAllProgress();
+      const existing = allProgress.find((p: { book_id: string }) => p.book_id === book.id);
+      if (existing && existing.modules_count > 0) {
+        router.push(`/learning/${book.id}`);
+        return;
+      }
+      const data = await bookApi.get(book.id);
+      const chapters = (data.spine?.chapters ?? []).map((ch: { title: string; learning_objectives: string[] }) => ({
+        title: ch.title,
+        knowledge_points: ch.learning_objectives ?? [],
+      }));
+      await importFromBook(book.id, chapters);
+      router.push(`/learning/${book.id}`);
+    } catch {
+      // silent — navigation won't happen on failure
+    }
+  }, [router]);
 
   const handleRebuildBook = async () => {
     if (!detail) return;
@@ -473,6 +496,7 @@ function BookPageInner() {
               onNewBook={handleNewBook}
               onSelectBook={(id) => void handleSelectBook(id)}
               onDeleteBook={(id) => void handleDeleteBook(id)}
+              onLearn={(book) => void handleLearn(book)}
             />
           )}
 

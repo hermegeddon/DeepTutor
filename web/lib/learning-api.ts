@@ -68,3 +68,13 @@ export async function redoProgress(bookId: string) {
   if (!res.ok) throw new Error(`Failed to redo progress: ${res.status}`);
   return res.json();
 }
+
+export async function importFromBook(bookId: string, chapters: { title: string; knowledge_points: string[] }[]) {
+  const res = await apiFetch(apiUrl(`/api/v1/learning/progress/${encodeURIComponent(bookId)}/import-from-book`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chapters }),
+  });
+  if (!res.ok) throw new Error(`Failed to import from book: ${res.status}`);
+  return res.json();
+}

@@ -1649,6 +1649,8 @@
   "guidedLearning.stage.module_test": "Module Test",
   "guidedLearning.stage.review": "Review",
   "guidedLearning.stage.completed": "Completed",
+  "Start learning": "Start learning",
+  "guidedLearning.alreadyHasProgress": "You already have learning progress for this book. Continuing...",
   "knowledgeType.memory": "Rote Memory",
   "knowledgeType.concept": "Conceptual",
   "knowledgeType.procedure": "Procedural",
