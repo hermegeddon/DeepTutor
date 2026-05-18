@@ -30,6 +30,7 @@ export default function LearningBookPage() {
   const [currentStage, setCurrentStage] = useState<string>("");
   const currentStageRef = useRef<string>("");
   const [connecting, setConnecting] = useState(true);
+  const [waitingForLLM, setWaitingForLLM] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const errorRef = useRef<boolean>(false);
   const activeTurnRetryRef = useRef<boolean>(false);
@@ -49,6 +50,7 @@ export default function LearningBookPage() {
   const [modules, setModules] = useState<ModuleData[]>([]);
   const [masteryLevels, setMasteryLevels] = useState<Record<string, number>>({});
   const [currentModuleId, setCurrentModuleId] = useState<string>("");
+  const [moduleSelected, setModuleSelected] = useState(false);
   const [waitingForInput, setWaitingForInput] = useState(false);
   const [inputPrompt, setInputPrompt] = useState("");
   const [userInput, setUserInput] = useState("");
@@ -84,6 +86,8 @@ export default function LearningBookPage() {
   const handleStreamEventRef = useRef<(evt: StreamEvent) => void>(() => {});
 
   const connect = useCallback(() => {
+    // Skip auto-connect when multiple modules exist and none selected yet
+    if (modules.length > 1 && !moduleSelected && !currentModuleId) return;
     // Clear any pending reconnect timer
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
@@ -106,6 +110,7 @@ export default function LearningBookPage() {
         book_references: [{ book_id: params.bookId, page_ids: [] }],
         config: {},
       }));
+      setWaitingForLLM(true);
     };
 
     ws.onmessage = (event) => {
@@ -148,6 +153,7 @@ export default function LearningBookPage() {
       return;
     }
     if (evt.type === "stage_start") {
+      setWaitingForLLM(false);
       currentStageRef.current = evt.stage;
       setCurrentStage(evt.stage);
       // Clear errors on new stage — previous turn's error should not block the next turn
@@ -278,6 +284,32 @@ export default function LearningBookPage() {
     };
   }, [connect]);
 
+  // Module picker: show when multiple modules exist and none selected
+  if (!connecting && !moduleSelected && modules.length > 1) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center max-w-md">
+          <h2 className="text-xl font-bold mb-2">Select a Module</h2>
+          <p className="text-sm text-[var(--muted-foreground)] mb-6">Choose a module to start guided learning</p>
+          <div className="flex flex-col gap-3">
+            {modules.map(m => (
+              <button
+                key={m.id}
+                onClick={() => { handleModuleClick(m.id); setModuleSelected(true); }}
+                className="px-6 py-4 rounded-xl border border-[var(--border)] hover:border-[var(--primary)] text-left transition-colors"
+              >
+                <div className="font-medium">{m.name}</div>
+                <div className="text-xs text-[var(--muted-foreground)] mt-1">
+                  {m.knowledge_points.length} knowledge points
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full relative">
       {toast && (
@@ -344,7 +376,16 @@ export default function LearningBookPage() {
         ) : (
           !waitingForInput && (
             <div className="flex items-center justify-center h-full text-[var(--muted-foreground)]">
-              {connecting ? <Loader2 className="w-8 h-8 animate-spin" /> : t("guidedLearning.ready")}
+              {connecting ? (
+                <Loader2 className="w-8 h-8 animate-spin" />
+              ) : waitingForLLM ? (
+                <div className="flex flex-col items-center gap-2">
+                  <Loader2 className="w-8 h-8 animate-spin" />
+                  <p className="text-sm">Generating diagnostic questions...</p>
+                </div>
+              ) : (
+                t("guidedLearning.ready")
+              )}
             </div>
           )
         )}
