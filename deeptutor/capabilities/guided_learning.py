@@ -310,6 +310,14 @@ class GuidedLearningCapability(BaseCapability):
         timeout: float | None = None,
     ) -> str | None:
         """Call LLM with bounded retry. Returns None if all retries exhausted."""
+        # Cross-turn cumulative failure gate
+        if progress.stage_failure_counts.get(stage_name, 0) >= self._STAGE_MAX_CUMULATIVE_FAILURES:
+            await stream.content(
+                f"阶段 {stage_name} 已多次失败，跳过。",
+                source=self.manifest.name,
+                metadata={"type": "stage_skipped", "stage": stage_name},
+            )
+            return None
         for attempt in range(self._STAGE_MAX_FAILURES):
             try:
                 return await self._call_llm_with_timeout(system_prompt, user_message, timeout=timeout)
@@ -570,6 +578,7 @@ class GuidedLearningCapability(BaseCapability):
     _RAG_TIMEOUT_SECONDS = 10
     _LLM_CHAIN_TIMEOUT_SECONDS = 60
     _STAGE_MAX_FAILURES = 2
+    _STAGE_MAX_CUMULATIVE_FAILURES = 4
     _ERROR_DIAGNOSIS_TIMEOUT_SECONDS = 45
 
     def _advance_after_kp(self, progress: LearningProgress, kps: list) -> None:

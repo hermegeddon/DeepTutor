@@ -272,3 +272,45 @@ async def test_error_diagnosis_records_failure_count():
     assert progress.current_stage == LearningStage.MODULE_TEST
     assert progress.stage_failure_counts.get("error_diagnosis", 0) >= 1
     assert "error_diagnosis" in progress.stage_failure_notes
+
+
+# ── Cross-turn cumulative failure gate ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cumulative_failure_skips_stage():
+    """When cumulative failures reach threshold, stage should skip without LLM call."""
+    cap = _make_capability()
+    cap._call_llm = AsyncMock(return_value="should not be called")
+    progress = _make_progress_with_module()
+    progress.current_stage = LearningStage.EXPLAIN
+    progress.stage_failure_counts["explain"] = 4  # at threshold
+    stream = FakeStream()
+
+    await cap._run_explain(progress, None, stream)
+
+    # Should skip without calling LLM
+    cap._call_llm.assert_not_called()
+    # Should show "多次失败" message
+    content_texts = [t for _, t in stream.events if _ == "content"]
+    assert any("多次失败" in t for t in content_texts)
+    # Should advance stage
+    assert progress.current_stage != LearningStage.EXPLAIN
+
+
+@pytest.mark.asyncio
+async def test_cumulative_failure_below_threshold_retries():
+    """When cumulative failures are below threshold, normal retry should proceed."""
+    cap = _make_capability()
+    cap._call_llm = AsyncMock(side_effect=RuntimeError("LLM unavailable"))
+    progress = _make_progress_with_module()
+    progress.current_stage = LearningStage.EXPLAIN
+    progress.stage_failure_counts["explain"] = 2  # below threshold of 4
+    stream = FakeStream()
+
+    await cap._run_explain(progress, None, stream)
+
+    # Should have attempted LLM calls (retries happened)
+    assert cap._call_llm.call_count >= 1
+    # Failure count should have increased
+    assert progress.stage_failure_counts["explain"] > 2
