@@ -168,8 +168,8 @@ export default function LearningBookPage() {
         // Resume existing turn
         currentTurnRef.current = info.turn_id;
         wsRef.current?.send(JSON.stringify({
-          type: "subscribe_session",
-          session_id: params.bookId,
+          type: "subscribe_turn",
+          turn_id: info.turn_id,
         }));
         setWaitingForLLM(true);
       } else {
