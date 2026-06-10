@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { SidebarShell } from "@/components/sidebar/SidebarShell";
 import { LogoutButton } from "@/components/auth/LogoutButton";
 import { AdminLink } from "@/components/auth/AdminLink";
+import { ProfileLink } from "@/components/auth/ProfileLink";
 import { useUnifiedChat } from "@/context/UnifiedChatContext";
 import {
   deleteSession,
@@ -134,6 +135,7 @@ export default function WorkspaceSidebar() {
       onDeleteSession={handleDeleteSession}
       footerSlot={(collapsed) => (
         <>
+          <ProfileLink collapsed={collapsed} />
           <AdminLink collapsed={collapsed} />
           <LogoutButton collapsed={collapsed} />
         </>

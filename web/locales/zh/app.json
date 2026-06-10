@@ -2358,5 +2358,18 @@
   "Partner": "伙伴",
   "Edited — your version becomes this partner's soul. The original template is untouched.": "已编辑——你的版本将成为这个伙伴的 soul，原模板保持不变。",
   "Mastery-based tutoring with a hard gate": "掌握式辅导：硬门槛 + 间隔复习",
-  "Mastery Path tooltip": "掌握式学习：硬门槛与间隔复习"
+  "Mastery Path tooltip": "掌握式学习：硬门槛与间隔复习",
+  "My profile": "个人资料",
+  "View your account and personalize your avatar": "查看账户信息并个性化你的头像",
+  "Administrator": "管理员",
+  "Joined": "注册时间",
+  "Avatar": "头像",
+  "Upload a picture or pick an icon": "上传图片或选择一个图标",
+  "Upload image": "上传图片",
+  "Remove photo": "移除照片",
+  "Or pick an icon": "或选择一个图标",
+  "Sign out": "退出登录",
+  "End your session on this device": "结束此设备上的会话",
+  "Failed to load profile": "加载个人资料失败",
+  "Image is too large": "图片过大"
 }

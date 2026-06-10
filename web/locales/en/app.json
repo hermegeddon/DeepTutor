@@ -2358,5 +2358,18 @@
   "Partner": "Partner",
   "Edited — your version becomes this partner's soul. The original template is untouched.": "Edited — your version becomes this partner's soul. The original template is untouched.",
   "Mastery-based tutoring with a hard gate": "Mastery-based tutoring with a hard gate",
-  "Mastery Path tooltip": "Mastery-based learning with a hard gate"
+  "Mastery Path tooltip": "Mastery-based learning with a hard gate",
+  "My profile": "My profile",
+  "View your account and personalize your avatar": "View your account and personalize your avatar",
+  "Administrator": "Administrator",
+  "Joined": "Joined",
+  "Avatar": "Avatar",
+  "Upload a picture or pick an icon": "Upload a picture or pick an icon",
+  "Upload image": "Upload image",
+  "Remove photo": "Remove photo",
+  "Or pick an icon": "Or pick an icon",
+  "Sign out": "Sign out",
+  "End your session on this device": "End your session on this device",
+  "Failed to load profile": "Failed to load profile",
+  "Image is too large": "Image is too large"
 }
