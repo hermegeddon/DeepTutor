@@ -1703,22 +1703,6 @@ class TurnRuntimeManager:
                 )
             await self._flush_buffered_events(execution)
             await self.store.update_turn_status(turn_id, "completed")
-            if not is_regenerate:
-                # The frontend disconnects from this turn's WS subscription
-                # shortly after ``done`` (with a small grace window), so we
-                # generate the title here — inside the try block, before
-                # finally sends the ``None`` sentinel to subscribers — so
-                # the ``session_meta`` event still reaches them. The LLM
-                # scope set up at turn start is still active in this
-                # context, meaning the user's selected model is used.
-                try:
-                    await self._maybe_generate_session_title(
-                        execution=execution,
-                        session_id=session_id,
-                        ui_language=str(payload.get("language", "en") or "en"),
-                    )
-                except Exception:
-                    logger.debug("Failed to generate session title", exc_info=True)
             if pending_done_event is None:
                 pending_done_event = StreamEvent(
                     type=StreamEventType.DONE,
@@ -1727,6 +1711,20 @@ class TurnRuntimeManager:
                 )
             await self._publish_live_event(execution, pending_done_event)
             stream_done_sent = True
+            if not is_regenerate:
+                # Title generation is post-turn metadata. Keep it after DONE
+                # so the composer and duration clock stop as soon as the
+                # assistant answer is saved; the frontend keeps this socket
+                # open briefly so the later ``session_meta`` title update can
+                # still arrive.
+                try:
+                    await self._maybe_generate_session_title(
+                        execution=execution,
+                        session_id=session_id,
+                        ui_language=str(payload.get("language", "en") or "en"),
+                    )
+                except Exception:
+                    logger.debug("Failed to generate session title", exc_info=True)
         except asyncio.CancelledError:
             if not stream_done_sent:
                 await self._publish_live_event(

@@ -174,7 +174,7 @@ DeepTutor ships four installation paths. They all share one workspace layout: se
 > ✨ **v1.4.4 is live.** `pip install -U deeptutor` picks up the latest stable. Pre-releases (when available) opt in with `pip install --pre -U deeptutor`.
 
 <details>
-<summary><b>Option 1 — Install From PyPI</b></summary>
+<summary><b>Option 1 — Install From PyPI</b> · full local Web app + CLI, no clone required</summary>
 
 Full local Web app + CLI, no clone required. Needs **Python 3.11+** and a **Node.js 20+** runtime on PATH (the packaged Next.js standalone server is spawned by `deeptutor start`).
 
@@ -192,7 +192,7 @@ After `deeptutor start`, open the frontend URL printed in the terminal — by de
 </details>
 
 <details>
-<summary><b>Option 2 — Install From Source</b></summary>
+<summary><b>Option 2 — Install From Source</b> · develop against a checkout</summary>
 
 For development against a checkout. Use **Python 3.11+** and **Node.js 22 LTS** to match CI and Docker.
 
@@ -256,7 +256,7 @@ deeptutor start
 </details>
 
 <details>
-<summary><b>Option 3 — Docker</b></summary>
+<summary><b>Option 3 — Docker</b> · one self-contained container</summary>
 
 One container for the full Web app. Images on GitHub Container Registry:
 
@@ -328,29 +328,8 @@ Docker Desktop (macOS/Windows) usually resolves `host.docker.internal` without `
 
 </details>
 
-### Code Execution Sandbox (office skills)
-
-The built-in office skills — **docx / pdf / pptx / xlsx** — work by having the
-model write a short Python script (`python-docx`, `reportlab`, `openpyxl`, …),
-run it through the `exec` / `code_execution` tools, and hand back a download URL.
-Those tools mount whenever a sandbox backend is active, which it is **by default**
-in every deployment shape:
-
-- **Local (Option 1 / 2) and Docker (Option 3, single container):** a restricted
-  subprocess sandbox runs the model's code (on the host locally, or inside the
-  container under Docker — the container being its own isolation boundary).
-- **docker-compose:** routed instead to a hardened, least-privileged **runner
-  sidecar** (`Dockerfile.runner`) via `DEEPTUTOR_SANDBOX_RUNNER_URL` — the
-  strongest posture, and preferred automatically when present.
-
-The subprocess sandbox is controlled by the `sandbox_allow_subprocess` setting in
-`data/user/settings/system.json` (default `true`). Running model-generated code
-on your host is a real trust decision — set it to `false` (or export
-`DEEPTUTOR_SANDBOX_ALLOW_SUBPROCESS=0`) to disable host-side execution, at the
-cost of the office skills no longer being able to produce files.
-
 <details>
-<summary><b>Option 4 — CLI Only</b></summary>
+<summary><b>Option 4 — CLI Only</b> · no Web UI, from a source checkout</summary>
 
 When you don't need the Web UI. The CLI-only package is installed from a source checkout, not from PyPI.
 
@@ -386,6 +365,30 @@ deeptutor config show
 </details>
 
 The local `deeptutor-cli` install ships no Web assets or server dependencies. Keep the source checkout around — the editable install points to it. To add the Web app later, install the PyPI package (Option 1) and run `deeptutor init` + `deeptutor start` from the same workspace.
+
+</details>
+
+<details>
+<summary><b>Code Execution Sandbox (office skills)</b> · running model-generated code for docx / pdf / pptx / xlsx</summary>
+
+The built-in office skills — **docx / pdf / pptx / xlsx** — work by having the
+model write a short Python script (`python-docx`, `reportlab`, `openpyxl`, …),
+run it through the `exec` / `code_execution` tools, and hand back a download URL.
+Those tools mount whenever a sandbox backend is active, which it is **by default**
+in every deployment shape:
+
+- **Local (Option 1 / 2) and Docker (Option 3, single container):** a restricted
+  subprocess sandbox runs the model's code (on the host locally, or inside the
+  container under Docker — the container being its own isolation boundary).
+- **docker-compose:** routed instead to a hardened, least-privileged **runner
+  sidecar** (`Dockerfile.runner`) via `DEEPTUTOR_SANDBOX_RUNNER_URL` — the
+  strongest posture, and preferred automatically when present.
+
+The subprocess sandbox is controlled by the `sandbox_allow_subprocess` setting in
+`data/user/settings/system.json` (default `true`). Running model-generated code
+on your host is a real trust decision — set it to `false` (or export
+`DEEPTUTOR_SANDBOX_ALLOW_SUBPROCESS=0`) to disable host-side execution, at the
+cost of the office skills no longer being able to produce files.
 
 </details>
 
