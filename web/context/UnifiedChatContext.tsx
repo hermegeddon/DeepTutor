@@ -925,7 +925,6 @@ export function UnifiedChatProvider({
     >
   >(new Map());
   const draftCounterRef = useRef(0);
-  const retryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   // Tracks in-flight regenerate requests so we can restore the popped
   // assistant message if the server rejects the request (e.g. ``regenerate_busy``
   // or ``nothing_to_regenerate``). Keyed by session entry key.
@@ -941,15 +940,38 @@ export function UnifiedChatProvider({
     stateRef.current = state;
   }, [state]);
 
-  useEffect(
-    () => () => {
-      runnersRef.current.forEach(({ client }) => client.disconnect());
-      runnersRef.current.clear();
-      retryTimersRef.current.forEach((id) => clearTimeout(id));
-      retryTimersRef.current.clear();
+  const dispatchPreference = useCallback(
+    (
+      action: Extract<
+        Action,
+        {
+          type:
+            | "SET_TOOLS"
+            | "SET_CAPABILITY"
+            | "SET_KB"
+            | "SET_LLM_SELECTION"
+            | "SET_PERSONA_SELECTION"
+            | "SET_LANGUAGE";
+        }
+      >,
+    ) => {
+      // React dispatch is asynchronous. Keep the imperative state ref in sync
+      // immediately so a same-tick send after choosing a capability/KB/model
+      // reads the updated session preferences instead of creating a fresh
+      // empty draft request.
+      stateRef.current = reducer(stateRef.current, action);
+      dispatch(action);
     },
     [],
   );
+
+  useEffect(() => {
+    const runners = runnersRef.current;
+    return () => {
+      runners.forEach(({ client }) => client.disconnect());
+      runners.clear();
+    };
+  }, []);
 
   const makeDraftKey = useCallback(() => {
     draftCounterRef.current += 1;
@@ -1182,30 +1204,11 @@ export function UnifiedChatProvider({
   );
 
   const sendThroughRunner = useCallback(
-    function dispatchToRunner(key: string, msg: ChatMessage, attempt = 0) {
+    (key: string, msg: ChatMessage) => {
       const runner = ensureRunner(key);
-      if (!runner.client.connected) {
-        if (attempt >= 10) {
-          console.error("WebSocket failed to connect after retries");
-          dispatch({ type: "STREAM_END", key, status: "failed" });
-          // Surfaces the dead-after-N-retries case (different code path
-          // from the close-while-streaming handler above). Same user
-          // mental model, so same toast copy.
-          notify(
-            i18n.t(
-              "Couldn't reach the server. Please check your connection and retry.",
-            ),
-            { tone: "error", durationMs: 6000 },
-          );
-          return;
-        }
-        const timerId = setTimeout(() => {
-          retryTimersRef.current.delete(timerId);
-          dispatchToRunner(key, msg, attempt + 1);
-        }, 200);
-        retryTimersRef.current.add(timerId);
-        return;
-      }
+      // UnifiedWSClient queues messages while the socket is still opening or
+      // reconnecting. This avoids dropping a user turn when the browser delays
+      // the WebSocket handshake behind other startup API requests.
       runner.client.send(msg);
     },
     [ensureRunner],
@@ -1656,29 +1659,47 @@ export function UnifiedChatProvider({
     return entries;
   }, [state.sessions]);
 
-  const setTools = useCallback((tools: string[]) => {
-    dispatch({ type: "SET_TOOLS", tools });
-  }, []);
+  const setTools = useCallback(
+    (tools: string[]) => {
+      dispatchPreference({ type: "SET_TOOLS", tools });
+    },
+    [dispatchPreference],
+  );
 
-  const setCapability = useCallback((cap: string | null) => {
-    dispatch({ type: "SET_CAPABILITY", cap });
-  }, []);
+  const setCapability = useCallback(
+    (cap: string | null) => {
+      dispatchPreference({ type: "SET_CAPABILITY", cap });
+    },
+    [dispatchPreference],
+  );
 
-  const setKBs = useCallback((kbs: string[]) => {
-    dispatch({ type: "SET_KB", kbs });
-  }, []);
+  const setKBs = useCallback(
+    (kbs: string[]) => {
+      dispatchPreference({ type: "SET_KB", kbs });
+    },
+    [dispatchPreference],
+  );
 
-  const setLLMSelection = useCallback((selection: LLMSelection | null) => {
-    dispatch({ type: "SET_LLM_SELECTION", selection });
-  }, []);
+  const setLLMSelection = useCallback(
+    (selection: LLMSelection | null) => {
+      dispatchPreference({ type: "SET_LLM_SELECTION", selection });
+    },
+    [dispatchPreference],
+  );
 
-  const setPersonaSelection = useCallback((persona: string) => {
-    dispatch({ type: "SET_PERSONA_SELECTION", persona });
-  }, []);
+  const setPersonaSelection = useCallback(
+    (persona: string) => {
+      dispatchPreference({ type: "SET_PERSONA_SELECTION", persona });
+    },
+    [dispatchPreference],
+  );
 
-  const setLanguage = useCallback((lang: string) => {
-    dispatch({ type: "SET_LANGUAGE", lang });
-  }, []);
+  const setLanguage = useCallback(
+    (lang: string) => {
+      dispatchPreference({ type: "SET_LANGUAGE", lang });
+    },
+    [dispatchPreference],
+  );
 
   const renameSessionTitle = useCallback(async (title: string) => {
     const trimmed = title.trim();

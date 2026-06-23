@@ -27,10 +27,28 @@ WORKDIR /app/web
 # Copy package files first for better caching
 COPY web/package.json web/package-lock.json* ./
 
-# Install dependencies with generous timeout for CI environments
-RUN npm config set fetch-timeout 600000 && \
-    npm config set fetch-retries 5 && \
-    npm ci --legacy-peer-deps
+# Install dependencies with generous timeout for CI environments.
+# If a corporate TLS/interception CA is supplied as a BuildKit secret named
+# `npm_ca`, trust it only for this install step so the CA is not baked into the
+# final image. Example compose override:
+#   services:
+#     deeptutor:
+#       build:
+#         secrets: [npm_ca]
+#   secrets:
+#     npm_ca:
+#       file: C:/path/to/npm-ca-bundle.pem
+RUN --mount=type=secret,id=npm_ca,required=false \
+    set -eu; \
+    NPM_CAFILE_ARG=""; \
+    if [ -f /run/secrets/npm_ca ]; then \
+        echo "Using npm CA bundle from BuildKit secret npm_ca"; \
+        export NODE_EXTRA_CA_CERTS=/run/secrets/npm_ca; \
+        NPM_CAFILE_ARG="--cafile=/run/secrets/npm_ca"; \
+    fi; \
+    npm config set fetch-timeout 600000; \
+    npm config set fetch-retries 5; \
+    npm ci --legacy-peer-deps ${NPM_CAFILE_ARG}
 
 # Copy frontend source code
 COPY web/ ./
@@ -47,8 +65,16 @@ COPY deeptutor/__version__.py /app/deeptutor/__version__.py
 RUN printf 'NEXT_PUBLIC_APP_VERSION=\n' > .env.local
 
 # Build Next.js for production with standalone output
-# This allows runtime environment variable injection
-RUN npm run build
+# This allows runtime environment variable injection. Use Webpack in Docker so
+# next/font/google runs through the Node-based loader, which honors
+# NODE_EXTRA_CA_CERTS in corporate TLS environments.
+RUN --mount=type=secret,id=npm_ca,required=false \
+    set -eu; \
+    if [ -f /run/secrets/npm_ca ]; then \
+        echo "Using Node CA bundle from BuildKit secret npm_ca for frontend build"; \
+        export NODE_EXTRA_CA_CERTS=/run/secrets/npm_ca; \
+    fi; \
+    npm run build -- --webpack
 
 # ============================================
 # Stage 1b: Node Runtime for Target Platform

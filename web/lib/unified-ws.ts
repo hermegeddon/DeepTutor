@@ -153,6 +153,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 45_000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const BASE_RECONNECT_DELAY_MS = 200;
+const MAX_PENDING_MESSAGES = 50;
 
 export class UnifiedWSClient {
   private ws: WebSocket | null = null;
@@ -165,6 +166,7 @@ export class UnifiedWSClient {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionalClose = false;
+  private pendingMessages: ChatMessage[] = [];
 
   private activeTurnId: string | null = null;
   private lastSeq = 0;
@@ -185,9 +187,18 @@ export class UnifiedWSClient {
     this.intentionalClose = false;
 
     const url = wsUrl("/api/v1/ws");
-    this.ws = new WebSocket(url);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(url);
+    } catch (err) {
+      console.error("WS connection failed:", err);
+      this.attemptReconnect();
+      return;
+    }
+    this.ws = socket;
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (this.ws !== socket) return;
       this.reconnectAttempt = 0;
       this.lastReceivedAt = Date.now();
       this.startHeartbeat();
@@ -199,9 +210,11 @@ export class UnifiedWSClient {
           seq: this.lastSeq,
         });
       }
+      this.flushPendingMessages();
     };
 
-    this.ws.onmessage = (ev) => {
+    socket.onmessage = (ev) => {
+      if (this.ws !== socket) return;
       this.lastReceivedAt = Date.now();
       try {
         const event: StreamEvent = JSON.parse(ev.data);
@@ -220,7 +233,8 @@ export class UnifiedWSClient {
       }
     };
 
-    this.ws.onclose = () => {
+    socket.onclose = () => {
+      if (this.ws !== socket) return;
       this.ws = null;
       this.stopHeartbeat();
       if (!this.intentionalClose) {
@@ -228,23 +242,26 @@ export class UnifiedWSClient {
       }
     };
 
-    this.ws.onerror = (err) => {
+    socket.onerror = (err) => {
+      if (this.ws !== socket) return;
       console.error("WS error:", err);
     };
   }
 
   send(msg: ChatMessage): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.error("WebSocket not connected");
+      this.queueMessage(msg);
+      this.connect();
       return;
     }
-    this.ws.send(JSON.stringify(msg));
+    this.sendNow(msg);
   }
 
   disconnect(): void {
     this.intentionalClose = true;
     this.stopHeartbeat();
     this.clearReconnectTimer();
+    this.clearPendingMessages();
     this.ws?.close();
     this.ws = null;
     this.resetResumeState();
@@ -285,6 +302,7 @@ export class UnifiedWSClient {
 
   private attemptReconnect(): void {
     if (this.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      this.clearPendingMessages();
       this.resetResumeState();
       this.onClose?.();
       return;
@@ -310,5 +328,29 @@ export class UnifiedWSClient {
     this.activeTurnId = null;
     this.lastSeq = 0;
     this.reconnectAttempt = 0;
+  }
+
+  private sendNow(msg: ChatMessage): void {
+    this.ws?.send(JSON.stringify(msg));
+  }
+
+  private queueMessage(msg: ChatMessage): void {
+    this.pendingMessages.push(msg);
+    if (this.pendingMessages.length > MAX_PENDING_MESSAGES) {
+      this.pendingMessages.shift();
+      console.warn("Dropped oldest pending WebSocket message after queue limit.");
+    }
+  }
+
+  private flushPendingMessages(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const pending = this.pendingMessages.splice(0);
+    for (const msg of pending) {
+      this.sendNow(msg);
+    }
+  }
+
+  private clearPendingMessages(): void {
+    this.pendingMessages = [];
   }
 }

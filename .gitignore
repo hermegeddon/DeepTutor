@@ -226,6 +226,9 @@ $RECYCLE.BIN/
 # Local scripts
 启动 DeepTutor.bat
 
+# Local Docker Compose overrides with machine-specific paths/secrets
+docker-compose.*.local.yml
+
 # ============================================
 # Testing and Coverage
 # ============================================

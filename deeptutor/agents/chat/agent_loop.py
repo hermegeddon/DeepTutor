@@ -24,6 +24,7 @@ tells the frontend how to render that round's text.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import suppress
 from dataclasses import dataclass, field
 import logging
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 # tool-calling rounds before a tool-less finish is forced. The model normally
 # exits earlier by replying without tool calls.
 LOOP_STAGE = "responding"
+LLM_CALL_HEARTBEAT_SECONDS = 45.0
 
 _THINK_OPEN_RE = re.compile(r"<\s*think(?:ing)?\b[^>]*>", re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r"<\s*/\s*think(?:ing)?\s*>", re.IGNORECASE)
@@ -123,6 +125,8 @@ class LLMCallResult:
     text: str
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str = ""
+    call_id: str = ""
+    call_kind: str = ""
 
 
 @dataclass(slots=True)
@@ -214,6 +218,33 @@ class AgentLoop:
     def _clean(self, text: str) -> str:
         return clean_thinking_tags(text, self.pipeline.binding, self.pipeline.model).strip()
 
+    def _should_nudge_mastery_toolless_finish(
+        self,
+        *,
+        state: AgentLoopState,
+        already_nudged: bool,
+    ) -> bool:
+        if already_nudged or state.tool_steps > 0:
+            return False
+        if not bool((self.context.metadata or {}).get("mastery_mode")):
+            return False
+        required_tools = {"mastery_status", "mastery_build"}
+        return bool(required_tools.intersection(self.enabled_tools))
+
+    def _mastery_toolless_finish_nudge(self) -> str:
+        return self.pipeline._t(
+            "loop.mastery_toolless_finish_nudge",
+            default=(
+                "You are in mastery tutor mode, but your previous response only "
+                "described a mastery path in prose. That does not create or update "
+                "the persistent Mastery Path shown in the UI. Continue now by "
+                "calling `mastery_status` first. If it reports no objectives, use "
+                "the retrieved knowledge-base context and call `mastery_build` with "
+                "the modules/objectives you drafted. Do not finish with prose until "
+                "a mastery tool has executed."
+            ),
+        )
+
     # ---- agent loop --------------------------------------------------------
 
     async def _run_loop(
@@ -232,6 +263,7 @@ class AgentLoop:
         """
         explore_label = self.pipeline._t("labels.exploring", default="Exploring")
         nudged_empty_finish = False
+        nudged_mastery_toolless_finish = False
         for _round in range(max(1, self.pipeline.effective_max_rounds(self.context))):
             try:
                 result = await self._call_llm(
@@ -295,6 +327,36 @@ class AgentLoop:
                         }
                     )
                     continue
+                if self._should_nudge_mastery_toolless_finish(
+                    state=state,
+                    already_nudged=nudged_mastery_toolless_finish,
+                ):
+                    # Mastery-path turns are not just explanatory chats: the
+                    # first action must inspect/build persistent mastery state.
+                    # If the model drafts a path in prose without tool calls,
+                    # that text is not saved for the UI. Keep it in context and
+                    # require one more round to call the mastery tools.
+                    nudged_mastery_toolless_finish = True
+                    await self._mark_llm_call_as_narration(result)
+                    await self.stream.progress(
+                        self.pipeline._t(
+                            "notices.mastery_toolless_finish_nudged",
+                            default=(
+                                "The model drafted a mastery path without saving it; "
+                                "asked it to use the mastery tools."
+                            ),
+                        ),
+                        source="chat",
+                        stage=LOOP_STAGE,
+                        metadata={"trace_kind": "warning"},
+                    )
+                    if result.text:
+                        messages.append({"role": "assistant", "content": result.text})
+                    messages.append(
+                        {"role": "user", "content": self._mastery_toolless_finish_nudge()}
+                    )
+                    continue
+
                 # Finish: the text streamed live this round IS the answer.
                 return await self._finalize_finish(final_text)
 
@@ -483,8 +545,34 @@ class AgentLoop:
                         segment, source="chat", stage=stage, metadata=chunk_meta
                     )
 
-        response_stream = await self._create_response_stream(kwargs, trace_meta, stage)
+        heartbeat_stop = asyncio.Event()
+
+        async def _heartbeat() -> None:
+            while not heartbeat_stop.is_set():
+                try:
+                    await asyncio.wait_for(
+                        heartbeat_stop.wait(), timeout=LLM_CALL_HEARTBEAT_SECONDS
+                    )
+                    return
+                except asyncio.TimeoutError:
+                    with suppress(Exception):
+                        await self.stream.progress(
+                            "",
+                            source="chat",
+                            stage=stage,
+                            metadata=merge_trace_metadata(
+                                trace_meta,
+                                {
+                                    "trace_kind": "call_heartbeat",
+                                    "call_state": "running",
+                                },
+                            ),
+                        )
+
+        heartbeat_task = asyncio.create_task(_heartbeat())
+        response_stream = None
         try:
+            response_stream = await self._create_response_stream(kwargs, trace_meta, stage)
             async for chunk in response_stream:
                 usage = getattr(chunk, "usage", None)
                 if usage is not None:
@@ -539,10 +627,14 @@ class AgentLoop:
                         acc["arguments"] += str(arguments)
                         output_chars += len(str(arguments))
         finally:
-            close = getattr(response_stream, "close", None)
-            if callable(close):
-                with suppress(Exception):
-                    await close()
+            heartbeat_stop.set()
+            with suppress(Exception):
+                await heartbeat_task
+            if response_stream is not None:
+                close = getattr(response_stream, "close", None)
+                if callable(close):
+                    with suppress(Exception):
+                        await close()
 
         await _emit_segments(think_filter.flush())
         text = "".join(text_parts)
@@ -577,7 +669,46 @@ class AgentLoop:
                 },
             ),
         )
-        return LLMCallResult(text=text, tool_calls=tool_calls, finish_reason=finish_reason)
+        return LLMCallResult(
+            text=text,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            call_id=call_id,
+            call_kind=call_kind,
+        )
+
+    async def _mark_llm_call_as_narration(self, result: LLMCallResult) -> None:
+        """Retrospectively mark a streamed round as non-answer narration.
+
+        The loop usually knows a round's role as soon as the provider finishes:
+        tool calls mean narration, no tool calls means final answer. Mastery mode
+        adds one semantic guard after that point: a tool-less draft is not enough
+        to create/update the persistent mastery path, so the loop keeps the draft
+        only as context and asks for tool use. Emit a second call-status marker
+        with the same call_id so the frontend and session persistence both remove
+        already-streamed draft text from the user-facing answer while retaining it
+        in the trace.
+        """
+        if not result.call_id:
+            return
+        await self.stream.progress(
+            "",
+            source="chat",
+            stage=LOOP_STAGE,
+            metadata={
+                "call_id": result.call_id,
+                "phase": LOOP_STAGE,
+                "call_kind": result.call_kind or "agent_loop_round",
+                "trace_id": result.call_id,
+                "trace_role": "explore",
+                "trace_group": "stage",
+                "trace_kind": "call_status",
+                "call_state": "complete",
+                "call_role": "narration",
+                "call_role_override": True,
+                "override_reason": "mastery_toolless_finish_nudge",
+            },
+        )
 
     async def _create_response_stream(
         self,
