@@ -223,8 +223,12 @@ RUN groupadd --system --gid 1000 deeptutor \
     && chown -R deeptutor:deeptutor /app/data /app/web/.next \
     && setcap cap_setuid,cap_setgid+ep /usr/sbin/gosu
 
-# Create supervisord configuration for running both services
-# Log output goes to stdout/stderr so docker logs can capture them
+# Create supervisord configuration for running both services.
+# The entrypoint runs supervisord as the unprivileged `deeptutor` user, so keep
+# supervisor-owned files under /tmp. Docker Desktop / Rancher Desktop can expose
+# /dev/fd/1 and /dev/fd/2 as root-owned pipes, which supervisor cannot reopen
+# after dropping privileges; child process logs therefore also go to /tmp while
+# the application keeps its normal persistent logs under data/user/logs.
 RUN mkdir -p /etc/supervisor/conf.d
 
 RUN cat > /etc/supervisor/conf.d/deeptutor.conf <<'EOF'
@@ -232,16 +236,17 @@ RUN cat > /etc/supervisor/conf.d/deeptutor.conf <<'EOF'
 nodaemon=true
 logfile=/dev/null
 logfile_maxbytes=0
-pidfile=/var/run/supervisord.pid
+pidfile=/tmp/supervisord.pid
+childlogdir=/tmp
 
 [program:backend]
 command=/bin/bash /app/start-backend.sh
 directory=/app
 autostart=true
 autorestart=true
-stdout_logfile=/dev/fd/1
+stdout_logfile=/tmp/deeptutor-backend.out.log
 stdout_logfile_maxbytes=0
-stderr_logfile=/dev/fd/2
+stderr_logfile=/tmp/deeptutor-backend.err.log
 stderr_logfile_maxbytes=0
 environment=PYTHONPATH="/app",PYTHONUNBUFFERED="1"
 
@@ -251,9 +256,9 @@ directory=/app/web
 autostart=true
 autorestart=true
 startsecs=5
-stdout_logfile=/dev/fd/1
+stdout_logfile=/tmp/deeptutor-frontend.out.log
 stdout_logfile_maxbytes=0
-stderr_logfile=/dev/fd/2
+stderr_logfile=/tmp/deeptutor-frontend.err.log
 stderr_logfile_maxbytes=0
 environment=NODE_ENV="production"
 EOF
@@ -428,6 +433,17 @@ FROM production AS development
 COPY --from=frontend-builder /app/web/node_modules ./web/node_modules
 COPY --from=frontend-builder /app/web/package.json ./web/package.json
 COPY --from=frontend-builder /app/web/next.config.js ./web/next.config.js
+COPY --from=frontend-builder /app/web/tsconfig.json ./web/tsconfig.json
+COPY --from=frontend-builder /app/web/postcss.config.js ./web/postcss.config.js
+COPY --from=frontend-builder /app/web/tailwind.config.js ./web/tailwind.config.js
+COPY --from=frontend-builder /app/web/eslint.config.mjs ./web/eslint.config.mjs
+COPY --from=frontend-builder /app/web/next-env.d.ts ./web/next-env.d.ts
+
+# Next dev writes under /app/web (.next, next-env.d.ts, and occasionally
+# generated config shims). The container runs as UID 1000 at runtime, so the
+# development image must not leave the web root owned by root after copying
+# node_modules and config files from the builder stage.
+RUN chown -R deeptutor:deeptutor /app/web
 
 # Install development tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -441,23 +457,25 @@ RUN pip install --no-cache-dir \
     black \
     ruff
 
-# Override supervisord config for development (with reload)
-# Log output goes to stdout/stderr so docker logs can capture them
+# Override supervisord config for development (with reload).
+# Keep supervisor-owned files under /tmp for the same unprivileged-runtime
+# reason as the production config above.
 RUN cat > /etc/supervisor/conf.d/deeptutor.conf <<'EOF'
 [supervisord]
 nodaemon=true
 logfile=/dev/null
 logfile_maxbytes=0
-pidfile=/var/run/supervisord.pid
+pidfile=/tmp/supervisord.pid
+childlogdir=/tmp
 
 [program:backend]
 command=python -m uvicorn deeptutor.api.main:app --host 0.0.0.0 --port %(ENV_BACKEND_PORT)s --reload --no-access-log
 directory=/app
 autostart=true
 autorestart=true
-stdout_logfile=/dev/fd/1
+stdout_logfile=/tmp/deeptutor-backend.out.log
 stdout_logfile_maxbytes=0
-stderr_logfile=/dev/fd/2
+stderr_logfile=/tmp/deeptutor-backend.err.log
 stderr_logfile_maxbytes=0
 environment=PYTHONPATH="/app",PYTHONUNBUFFERED="1"
 
@@ -467,9 +485,9 @@ directory=/app/web
 autostart=true
 autorestart=true
 startsecs=5
-stdout_logfile=/dev/fd/1
+stdout_logfile=/tmp/deeptutor-frontend.out.log
 stdout_logfile_maxbytes=0
-stderr_logfile=/dev/fd/2
+stderr_logfile=/tmp/deeptutor-frontend.err.log
 stderr_logfile_maxbytes=0
 environment=NODE_ENV="development"
 EOF
