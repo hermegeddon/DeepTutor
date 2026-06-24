@@ -448,6 +448,7 @@ COPY --from=frontend-builder /app/web/postcss.config.js ./web/postcss.config.js
 COPY --from=frontend-builder /app/web/tailwind.config.js ./web/tailwind.config.js
 COPY --from=frontend-builder /app/web/eslint.config.mjs ./web/eslint.config.mjs
 COPY --from=frontend-builder /app/web/next-env.d.ts ./web/next-env.d.ts
+COPY --from=frontend-builder /app/web/proxy.ts ./web/proxy.ts
 
 # Next dev writes under /app/web (.next, next-env.d.ts, and occasionally
 # generated config shims). The container runs as UID 1000 at runtime, so the
