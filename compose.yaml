@@ -40,10 +40,12 @@
 #     in the image) or the restricted subprocess backend controlled by
 #     the `sandbox_allow_subprocess` setting in system.json. See
 #     deeptutor/services/sandbox/config.py:build_backend().
-#   * The image runs as a non-root `deeptutor` user (UID 1000). The
-#     entrypoint chowns `/app/data` and drops privileges via `gosu` before
-#     starting supervisord, so the running process is UID 1000 inside the
-#     container. Under `userns_mode: keep-id` that maps to the host user.
+#   * The backend and frontend run as a non-root `deeptutor` user (UID
+#     1000). supervisord runs as root (PID 1), the entrypoint chowns
+#     `/app/data`, and each program is dropped to `deeptutor` via its
+#     per-program `user=` directive, so the app processes are UID 1000
+#     inside the container. Under `userns_mode: keep-id` that maps to the
+#     host user.
 #   * URL knowledge lives in `data/user/settings/system.json` (in-network
 #     `next_public_api_base` for the typical case, or
 #     `next_public_api_base_external` for cloud/external). The entrypoint
@@ -177,14 +179,15 @@ services:
         condition: service_healthy
     networks:
       - deeptutor
-    # Optional hardening — uncomment to taste. The image drops privileges
-    # to UID 1000 via `gosu` before starting supervisord, so cap_drop ALL
-    # is safe in the sense that the running process has no caps anyway;
-    # uncomment only if you also run the sandbox-runner or similar.
+    # Optional hardening — uncomment to taste. supervisord runs as root
+    # (PID 1) and setuids each program down to UID 1000, which needs
+    # CAP_SETUID/CAP_SETGID — so do NOT `cap_drop: ALL` here, it would stop
+    # the backend/frontend from spawning. `no-new-privileges` is safe (a
+    # root process dropping its own privileges is not "gaining" any).
     # security_opt:
     #   - no-new-privileges:true
-    # cap_drop:
-    #   - ALL
+    # # cap_drop: ALL is unsafe — supervisord needs CAP_SETUID/CAP_SETGID to
+    # # drop its children to the deeptutor user.
     # Resource limits. Honored on cgroup v2 hosts; podman warns and skips
     # on cgroup v1 or no-cgroup environments.
     # pids_limit: 1024

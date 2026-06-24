@@ -14,6 +14,7 @@ from deeptutor.services.config.runtime_settings import (
     DOCUMENT_PARSING_ENGINE_DOCLING,
     DOCUMENT_PARSING_ENGINE_MARKITDOWN,
     DOCUMENT_PARSING_ENGINE_MINERU,
+    DOCUMENT_PARSING_ENGINE_PYMUPDF4LLM,
     DOCUMENT_PARSING_ENGINE_TEXT_ONLY,
 )
 
@@ -45,12 +46,19 @@ def _markitdown_class():
     return MarkItDownParser
 
 
+def _pymupdf4llm_class():
+    from .pymupdf4llm.engine import PyMuPDF4LLMParser
+
+    return PyMuPDF4LLMParser
+
+
 # name -> zero-arg loader returning the engine class.
 _ENGINE_LOADERS: Dict[str, Callable[[], Any]] = {
     DOCUMENT_PARSING_ENGINE_TEXT_ONLY: _text_only_class,
     DOCUMENT_PARSING_ENGINE_MINERU: _mineru_class,
     DOCUMENT_PARSING_ENGINE_DOCLING: _docling_class,
     DOCUMENT_PARSING_ENGINE_MARKITDOWN: _markitdown_class,
+    DOCUMENT_PARSING_ENGINE_PYMUPDF4LLM: _pymupdf4llm_class,
 }
 
 KNOWN_ENGINES = frozenset(_ENGINE_LOADERS)
@@ -86,6 +94,15 @@ _ENGINE_META: Dict[str, Dict[str, Any]] = {
         "description": (
             "Lightweight, no model downloads — broad format support, Markdown "
             "output. Works out of the box."
+        ),
+        "needs_local_models": False,
+    },
+    DOCUMENT_PARSING_ENGINE_PYMUPDF4LLM: {
+        "name": "PyMuPDF4LLM",
+        "description": (
+            "Lightweight, no model downloads or CUDA — runs on low-end / GPU-less "
+            "machines. PDF/e-book → Markdown and can extract images. PDF and "
+            "e-book formats only."
         ),
         "needs_local_models": False,
     },

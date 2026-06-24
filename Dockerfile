@@ -152,13 +152,8 @@ WORKDIR /app
 
 # Install system dependencies
 # Note: libgl1 and libglib2.0-0 are required for OpenCV (used by mineru)
-# libcap2-bin provides `setcap`, used below to grant gosu the
-# capabilities it needs to setuid/setgid inside rootless podman user
-# namespaces (where the parent process doesn't have those caps).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    gosu \
-    libcap2-bin \
     ca-certificates \
     bash \
     supervisor \
@@ -212,16 +207,14 @@ RUN mkdir -p \
     data/user/logs \
     data/knowledge_bases
 
-# Bake a non-root user for `gosu deeptutor supervisord` (entrypoint drops privs
-# after chown'ing /app/data). UID 1000 matches the host user under rootless
-# podman's `userns_mode: keep-id` with a bind mount on ./data.
-# `setcap` grants gosu CAP_SETUID+CAP_SETGID so it can drop privileges
-# inside rootless podman user namespaces (where the parent process
-# doesn't have those caps by default).
+# Bake a non-root user for the supervisord programs. supervisord runs as
+# root (PID 1) and drops each child to this user via the per-program
+# `user=deeptutor` directive, so the backend/frontend processes stay
+# non-root. UID 1000 matches the host user under rootless podman's
+# `userns_mode: keep-id` with a bind mount on ./data.
 RUN groupadd --system --gid 1000 deeptutor \
     && useradd --system --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin deeptutor \
-    && chown -R deeptutor:deeptutor /app/data /app/web/.next \
-    && setcap cap_setuid,cap_setgid+ep /usr/sbin/gosu
+    && chown -R deeptutor:deeptutor /app/data /app/web/.next
 
 # Create supervisord configuration for running both services.
 # The entrypoint runs supervisord as the unprivileged `deeptutor` user, so keep
@@ -236,12 +229,13 @@ RUN cat > /etc/supervisor/conf.d/deeptutor.conf <<'EOF'
 nodaemon=true
 logfile=/dev/null
 logfile_maxbytes=0
-pidfile=/tmp/supervisord.pid
-childlogdir=/tmp
+pidfile=/var/run/supervisord.pid
+user=root
 
 [program:backend]
 command=/bin/bash /app/start-backend.sh
 directory=/app
+user=deeptutor
 autostart=true
 autorestart=true
 stdout_logfile=/tmp/deeptutor-backend.out.log
@@ -253,6 +247,7 @@ environment=PYTHONPATH="/app",PYTHONUNBUFFERED="1"
 [program:frontend]
 command=/bin/bash /app/start-frontend.sh
 directory=/app/web
+user=deeptutor
 autostart=true
 autorestart=true
 startsecs=5
@@ -271,13 +266,18 @@ RUN cat > /app/start-backend.sh <<'EOF'
 set -e
 
 BACKEND_PORT=${BACKEND_PORT:-8001}
+BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
 
-echo "[Backend]  🚀 Starting FastAPI backend on port ${BACKEND_PORT}..."
+echo "[Backend]  🚀 Starting FastAPI backend on ${BACKEND_HOST}:${BACKEND_PORT}..."
 
 # Run uvicorn directly - the application's logging system already handles:
 # 1. Console output (visible in docker logs)
 # 2. File logging to data/user/logs/ai_tutor_*.log
-exec python -m uvicorn deeptutor.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --no-access-log
+#
+# BACKEND_HOST defaults to 0.0.0.0 (LAN-reachable, matches bridge-mode
+# port publishing). Set BACKEND_HOST=127.0.0.1 when running with
+# network_mode: host to keep the backend on loopback only.
+exec python -m uvicorn deeptutor.api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT} --no-access-log
 EOF
 
 RUN sed -i 's/\r$//' /app/start-backend.sh && chmod +x /app/start-backend.sh
@@ -292,10 +292,11 @@ RUN cat > /app/start-frontend.sh <<'EOF'
 set -e
 
 FRONTEND_PORT=${FRONTEND_PORT:-3782}
-echo "[Frontend] 🚀 Starting Next.js frontend on port ${FRONTEND_PORT}..."
+FRONTEND_HOST=${FRONTEND_HOST:-0.0.0.0}
+echo "[Frontend] 🚀 Starting Next.js frontend on ${FRONTEND_HOST}:${FRONTEND_PORT}..."
 
 export PORT=${FRONTEND_PORT}
-export HOSTNAME=0.0.0.0
+export HOSTNAME=${FRONTEND_HOST}
 exec node /app/web/server.js
 EOF
 
@@ -388,10 +389,19 @@ echo "   - data/user/settings/main.yaml"
 echo "   - data/user/settings/agents.yaml"
 echo "============================================"
 
-# Start supervisord as the unprivileged deeptutor user (UID 1000). The
-# supervisord children (backend, frontend) inherit this UID; chown above
-# ensured they can write under /app/data.
-exec gosu deeptutor /usr/bin/supervisord -c /etc/supervisor/conf.d/deeptutor.conf
+# Run supervisord as root so it can open the container's stdout/stderr
+# (/dev/fd/1,2 — root-owned pipes under a rootful daemon like Docker Desktop)
+# and write its pidfile under /var/run. The backend and frontend programs are
+# dropped to the unprivileged deeptutor user (UID 1000) via `user=deeptutor`
+# in the supervisord config, so the app processes stay non-root.
+#
+# Dropping supervisord ITSELF to UID 1000 here (the previous
+# `exec gosu deeptutor ...`) worked under rootless podman — where UID 1000 is
+# the mapped host user that owns those FDs — but under a rootful daemon it
+# could not open /dev/fd/1,2 ("making dispatchers ... EACCES") nor the pidfile,
+# so neither service ever started. Per-program `user=` keeps the children
+# unprivileged in both runtimes without that breakage.
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/deeptutor.conf
 EOF
 
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
@@ -445,6 +455,12 @@ COPY --from=frontend-builder /app/web/next-env.d.ts ./web/next-env.d.ts
 # node_modules and config files from the builder stage.
 RUN chown -R deeptutor:deeptutor /app/web
 
+# `next dev` runs as the unprivileged deeptutor user (via `user=deeptutor` in
+# the supervisord config) and must create/write its build cache under
+# /app/web/.next, so give that user ownership of the web dir and the cache.
+RUN mkdir -p /app/web/.next \
+    && chown deeptutor:deeptutor /app/web /app/web/.next
+
 # Install development tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
@@ -465,12 +481,13 @@ RUN cat > /etc/supervisor/conf.d/deeptutor.conf <<'EOF'
 nodaemon=true
 logfile=/dev/null
 logfile_maxbytes=0
-pidfile=/tmp/supervisord.pid
-childlogdir=/tmp
+pidfile=/var/run/supervisord.pid
+user=root
 
 [program:backend]
 command=python -m uvicorn deeptutor.api.main:app --host 0.0.0.0 --port %(ENV_BACKEND_PORT)s --reload --no-access-log
 directory=/app
+user=deeptutor
 autostart=true
 autorestart=true
 stdout_logfile=/tmp/deeptutor-backend.out.log
@@ -482,6 +499,7 @@ environment=PYTHONPATH="/app",PYTHONUNBUFFERED="1"
 [program:frontend]
 command=/bin/bash -c "cd /app/web && node node_modules/next/dist/bin/next dev -H 0.0.0.0 -p ${FRONTEND_PORT:-3782}"
 directory=/app/web
+user=deeptutor
 autostart=true
 autorestart=true
 startsecs=5

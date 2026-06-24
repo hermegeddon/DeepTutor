@@ -18,14 +18,21 @@ flavours exist today:
   *local* CLI (Claude Code / Codex), keyed by an optional ``cwd``; or a
   ``partner`` (one of the user's own partners), keyed by ``partner_id``. It has
   no path on disk and nothing to index or retrieve. See ``capabilities/subagent``.
+* ``lightrag_server`` — a pointer (``server_url`` + optional ``api_key``) to an
+  external, standalone LightRAG server the user already runs and indexed. We
+  never index or store anything locally: retrieval is offloaded to that server's
+  ``/query`` endpoint and the bound ``rag_provider`` (``lightrag-server``) shapes
+  the result for the ``rag`` tool. One server instance = one workspace = one KB.
+  See ``services/rag/pipelines/lightrag_server``.
 
 All connected flavours share the same lifecycle quirks: no on-disk folder under
 ``base_dir``, no embedding reconcile, and deletion must never touch the
-external files. The :func:`is_connected_kb` / :func:`external_root_of` helpers
+external resource. The :func:`is_connected_kb` / :func:`external_root_of` helpers
 let the manager treat them uniformly without sprinkling ``type`` literals
-across the codebase. ``subagent`` is connected but points at no folder, so
-:func:`external_root_of` returns ``None`` for it — nothing resolves it to a
-path because the capability owns the turn and never touches rag.
+across the codebase. ``subagent`` and ``lightrag_server`` are connected but point
+at no folder, so :func:`external_root_of` returns ``None`` for them — a subagent
+is driven by its capability and a LightRAG server is reached over HTTP; neither
+resolves to a local path.
 
 Kept in its own low-level module so both :mod:`deeptutor.knowledge.manager`
 and the capability layer can import it without a cycle.
@@ -50,9 +57,17 @@ LINKED_KB_TYPE = "linked"
 # working directory. Driven live via ``consult_subagent``; never indexed.
 SUBAGENT_KB_TYPE = "subagent"
 
+# A connected external LightRAG server: a pointer (``server_url`` + optional
+# ``api_key``) to a standalone LightRAG instance the user runs. No path on disk
+# and no local index — retrieval is offloaded over HTTP to the server's
+# ``/query`` endpoint by the ``lightrag-server`` provider.
+LIGHTRAG_SERVER_KB_TYPE = "lightrag_server"
+
 # Every pointer/connected KB type. Membership here is what makes the manager
 # skip the index pipeline, the orphan prune and the embedding reconcile.
-CONNECTED_KB_TYPES = frozenset({OBSIDIAN_KB_TYPE, LINKED_KB_TYPE, SUBAGENT_KB_TYPE})
+CONNECTED_KB_TYPES = frozenset(
+    {OBSIDIAN_KB_TYPE, LINKED_KB_TYPE, SUBAGENT_KB_TYPE, LIGHTRAG_SERVER_KB_TYPE}
+)
 
 
 def is_connected_kb(entry: Any) -> bool:
@@ -75,6 +90,7 @@ __all__ = [
     "OBSIDIAN_KB_TYPE",
     "LINKED_KB_TYPE",
     "SUBAGENT_KB_TYPE",
+    "LIGHTRAG_SERVER_KB_TYPE",
     "CONNECTED_KB_TYPES",
     "is_connected_kb",
     "external_root_of",

@@ -46,6 +46,7 @@ class TestPipelineFactory:
             "pageindex",
             "graphrag",
             "lightrag",
+            "lightrag-server",
         }
 
     def test_get_pipeline_returns_singleton(self) -> None:
@@ -80,6 +81,7 @@ class TestRAGServiceClassHelpers:
             "pageindex",
             "graphrag",
             "lightrag",
+            "lightrag-server",
         }
 
     def test_has_provider_default_true(self) -> None:

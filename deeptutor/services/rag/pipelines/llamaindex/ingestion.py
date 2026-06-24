@@ -14,6 +14,8 @@ from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import BaseNode
 
+from . import vector_store
+
 
 def build_ingestion_pipeline() -> IngestionPipeline:
     """Create the default DeepTutor ingestion pipeline.
@@ -80,9 +82,16 @@ def documents_to_nodes(documents: list[Any], *, show_progress: bool = True) -> l
 def create_index_from_documents(
     documents: list[Any], storage_dir: Path, *, show_progress: bool = True
 ) -> tuple[VectorStoreIndex, int]:
-    """Create and persist a VectorStoreIndex from documents."""
+    """Create and persist a VectorStoreIndex from documents.
+
+    Uses a FAISS-backed store when available and all node embeddings share one
+    dimension; otherwise LlamaIndex's default SimpleVectorStore.
+    """
     nodes = documents_to_nodes(documents, show_progress=show_progress)
-    index = VectorStoreIndex(nodes=nodes, show_progress=show_progress)
+    storage_context = vector_store.storage_context_for_nodes(nodes)
+    index = VectorStoreIndex(
+        nodes=nodes, storage_context=storage_context, show_progress=show_progress
+    )
     index.storage_context.persist(persist_dir=str(storage_dir))
     return index, len(documents)
 

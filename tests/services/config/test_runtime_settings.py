@@ -310,7 +310,13 @@ def test_document_parsing_v1_to_v2_migration(tmp_path: Path) -> None:
     assert mineru["language"] == "ch"
     assert mineru["allow_local_model_download"] is False
     # All engines are always present after normalization.
-    assert set(full["engines"]) == {"text_only", "mineru", "docling", "markitdown"}
+    assert set(full["engines"]) == {
+        "text_only",
+        "mineru",
+        "docling",
+        "markitdown",
+        "pymupdf4llm",
+    }
     # Migration is persisted to the renamed file (v2, no top-level flat keys);
     # the legacy mineru.json is gone.
     assert not service.path_for("mineru").exists()

@@ -43,10 +43,11 @@ no longer lives in the frontend bundle. Concretely:
   `data/user/settings/system.json`.
 - `start-frontend.sh` is now 12 lines: it sets `PORT`/`HOSTNAME` and
   `exec`s `node /app/web/server.js`. No mutations of the bundle.
-- The entrypoint `gosu`s down to a non-root `deeptutor` user (UID 1000)
-  before launching `supervisord`. With `userns_mode: keep-id` on the host
-  that maps to your host UID; with a regular `docker run` it's a normal
-  unprivileged user inside the container.
+- `supervisord` runs as root (PID 1) and drops each program (backend,
+  frontend) to a non-root `deeptutor` user (UID 1000) via its per-program
+  `user=` directive, so the app processes stay non-root. With
+  `userns_mode: keep-id` on the host that UID maps to your host UID; with a
+  regular `docker run` it's a normal unprivileged user inside the container.
 
 The full per-installation guide follows.
 
@@ -159,6 +160,13 @@ the `-p` flags. The container shares the host network directly, so open
 <http://127.0.0.1:3782> (or the `frontend_port` in `system.json`), and
 host services can be reached with normal localhost URLs.
 
+In host-network mode the processes bind directly on the host interfaces
+(there is no `-p 127.0.0.1:` prefix to scope them). To keep them off the
+LAN, set `BACKEND_HOST=127.0.0.1` and `FRONTEND_HOST=127.0.0.1` — they
+override uvicorn's `--host` and Next.js's `HOSTNAME` (both default to
+`0.0.0.0`). Only use these with `--network=host`: in bridge mode binding
+to loopback breaks the published `-p` port forward.
+
 ---
 
 ## Podman / rootless / read-only rootfs
@@ -166,8 +174,8 @@ host services can be reached with normal localhost URLs.
 For users who want the strongest default posture — rootless, with a
 read-only root filesystem — `compose.yaml` is the supported starting
 point. It pulls the same `ghcr.io/hkuds/deeptutor:latest` image and
-relies on the entrypoint chown + `gosu` privilege drop, the URL-forwarding
-`proxy.ts`, and host-side bind mounts to make it all work.
+relies on the entrypoint chown + supervisord's per-program privilege drop,
+the URL-forwarding `proxy.ts`, and host-side bind mounts to make it all work.
 
 ```bash
 cp .env.example .env       # then edit if needed
@@ -230,18 +238,23 @@ podman run --rm -d --name deeptutor \
   ghcr.io/hkuds/deeptutor:latest
 ```
 
-After the container is up, `podman exec deeptutor id` should report
-`uid=1000(deeptutor)` — the entrypoint's `gosu deeptutor supervisord`
-privilege drop took effect.
+After the container is up, the backend and frontend run as the non-root
+`deeptutor` user — `podman exec deeptutor ps -o user,pid,comm` shows
+`supervisord` as root (PID 1) with its `uvicorn`/`node` children as
+`deeptutor` (UID 1000).
 
-### Known minor follow-up
+### Supervisord pidfile
 
-`supervisord` emits
-`CRIT could not write pidfile /var/run/supervisord.pid` on startup
-because `/var/run` tmpfs is `mode=0755` (owned by root) and the
-now-unprivileged PID 1 can't write there. Children still spawn fine and
-reach RUNNING state. The fix is `mode=1777` on `/var/run` (matching
-`/tmp`); deferred to keep this PR focused.
+`supervisord` (PID 1) runs as **root**, which owns the `/var/run` tmpfs, so
+it writes `/var/run/supervisord.pid` cleanly even at `mode=0755`. An earlier
+build dropped PID 1 *itself* to the unprivileged `deeptutor` user (via
+`gosu`); that PID 1 couldn't write the root-owned `/var/run` and logged a
+cosmetic `CRIT could not write pidfile /var/run/supervisord.pid` on every
+start under rootless podman. Running supervisord as root and dropping only
+its child programs to `deeptutor` (the `user=` directives above) resolved
+both that CRIT and the fatal `/dev/fd/1,2` EACCES seen under rootful Docker.
+If you ever revert PID 1 to a non-root user, set `/var/run` to `mode=1777`
+(matching `/tmp`) so the pidfile stays writable.
 
 ---
 

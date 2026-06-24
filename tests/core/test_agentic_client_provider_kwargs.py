@@ -167,12 +167,62 @@ def test_build_openai_client_routes_github_copilot_backend_through_adapter(monke
 
 def test_anthropic_backend_can_use_native_tool_calling() -> None:
     assert can_use_native_tool_calling(binding="custom_anthropic", model="claude-test") is True
-    assert can_use_native_tool_calling(binding="minimax_anthropic", model="MiniMax-M2") is True
+    assert can_use_native_tool_calling(binding="minimax_anthropic", model="MiniMax-M3") is True
 
 
 def test_custom_qwen_can_use_native_tool_calling() -> None:
     assert can_use_native_tool_calling(binding="custom", model="qwen3.6-plus") is True
     assert can_use_native_tool_calling(binding="dashscope", model="qwen-plus") is True
+
+
+def test_siliconflow_deepseek_can_use_native_tool_calling() -> None:
+    assert (
+        can_use_native_tool_calling(
+            binding="siliconflow",
+            model="deepseek-ai/DeepSeek-V4-Pro",
+        )
+        is True
+    )
+
+
+def test_registered_cloud_openai_compat_providers_enable_native_tools() -> None:
+    # Registered cloud OpenAI-compatible providers are tool-capable by default,
+    # even without a dedicated PROVIDER_CAPABILITIES entry — function calling is
+    # part of the OpenAI-compatible API contract. Guards against silently
+    # disabling native tools when a new cloud provider joins the registry (the
+    # gap that affected SiliconFlow before #584).
+    for binding in (
+        "gemini",
+        "zhipu",
+        "qianfan",
+        "stepfun",
+        "xiaomi_mimo",
+        "nvidia_nim",
+        "aihubmix",
+        "volcengine_coding_plan",
+        "byteplus_coding_plan",
+    ):
+        assert can_use_native_tool_calling(binding=binding, model=None) is True, binding
+
+
+def test_local_and_oauth_backends_stay_opted_out_of_native_tools() -> None:
+    # Local OpenAI-compatible servers (model-dependent, unreliable tool support)
+    # and the OAuth CLI backends keep native tool schemas disabled.
+    for binding in (
+        "ollama",
+        "vllm",
+        "lm_studio",
+        "llama_cpp",
+        "lemonade",
+        "ovms",
+        "openai_codex",
+        "github_copilot",
+    ):
+        assert can_use_native_tool_calling(binding=binding, model=None) is False, binding
+
+
+def test_unknown_binding_does_not_enable_native_tools() -> None:
+    assert can_use_native_tool_calling(binding="totally-unknown", model=None) is False
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,30 @@ class _FakeKBManager:
         kb_dir.mkdir(parents=True, exist_ok=True)
         return kb_dir
 
+    def register_lightrag_server_kb(
+        self,
+        name: str,
+        server_url: str,
+        *,
+        api_key: str = "",
+        search_mode: str = "",
+        description: str = "",
+    ) -> dict:
+        if name in self.config.get("knowledge_bases", {}):
+            raise ValueError(f"A knowledge base named '{name}' already exists.")
+        entry = {
+            "path": name,
+            "type": "lightrag_server",
+            "rag_provider": "lightrag-server",
+            "server_url": server_url,
+            "api_key": api_key,
+            "status": "ready",
+        }
+        if search_mode:
+            entry["search_mode"] = search_mode
+        self.config.setdefault("knowledge_bases", {})[name] = entry
+        return entry
+
 
 class _FakeInitializer:
     def __init__(self, kb_name: str, base_dir: str, **_kwargs) -> None:
@@ -110,15 +134,26 @@ def test_rag_providers_lists_llamaindex_and_pageindex() -> None:
     assert response.status_code == 200
     payload = response.json()
     by_id = {p["id"]: p for p in payload["providers"]}
-    assert set(by_id) == {"llamaindex", "pageindex", "graphrag", "lightrag"}
+    assert set(by_id) == {
+        "llamaindex",
+        "pageindex",
+        "graphrag",
+        "lightrag",
+        "lightrag-server",
+    }
     # LlamaIndex works out of the box; PageIndex needs an API key; GraphRAG and
     # LightRAG are optional local engines (no API key, configured = installed).
     assert by_id["llamaindex"]["requires_api_key"] is False
     assert by_id["pageindex"]["requires_api_key"] is True
     assert by_id["graphrag"]["requires_api_key"] is False
     assert by_id["lightrag"]["requires_api_key"] is False
+    # LightRAG Server is a thin HTTP client: always available, no API key gate
+    # (the per-KB endpoint is configured at connect time).
+    assert by_id["lightrag-server"]["requires_api_key"] is False
+    assert by_id["lightrag-server"]["configured"] is True
     # Mode-aware engines advertise their retrieval modes; vector engines don't.
     assert "hybrid" in by_id["lightrag"]["modes"]
+    assert "mix" in by_id["lightrag-server"]["modes"]
     assert not by_id["llamaindex"].get("modes")
 
 
@@ -909,11 +944,13 @@ def test_rag_providers_marks_linkable() -> None:
     with TestClient(_build_app()) as client:
         providers = client.get("/api/v1/knowledge/rag-providers").json()["providers"]
     by_id = {p["id"]: p for p in providers}
-    # Self-contained local indexes can be linked in place; PageIndex (cloud) can't.
+    # Self-contained local indexes can be linked in place; PageIndex (cloud) and
+    # LightRAG Server (remote, no local folder) can't.
     assert by_id["llamaindex"]["linkable"] is True
     assert by_id["graphrag"]["linkable"] is True
     assert by_id["lightrag"]["linkable"] is True
     assert by_id["pageindex"]["linkable"] is False
+    assert by_id["lightrag-server"]["linkable"] is False
 
 
 def test_probe_folder_endpoint_finds_ready_index(tmp_path: Path) -> None:
@@ -950,11 +987,81 @@ def test_probe_folder_endpoint_rejects_pageindex(tmp_path: Path) -> None:
     assert payload["error"]
 
 
+def _patch_server_probe(monkeypatch, *, ok: bool, error: str | None = None) -> None:
+    """Stub the LightRAG server probe so router tests need no live server."""
+    from deeptutor.services.rag.pipelines.lightrag_server import probe as probe_module
+
+    async def _fake_probe(server_url: str, api_key: str = "", **_kwargs):
+        result = probe_module.ServerProbe(base_url=server_url.rstrip("/"))
+        result.ok = ok
+        result.reachable = ok
+        result.auth_required = bool(api_key)
+        result.auth_ok = ok
+        result.error = error
+        return result
+
+    monkeypatch.setattr(probe_module, "probe_server", _fake_probe)
+
+
+def test_probe_lightrag_server_endpoint_reports_verdict(monkeypatch) -> None:
+    _patch_server_probe(monkeypatch, ok=True)
+    with TestClient(_build_app()) as client:
+        response = client.post(
+            "/api/v1/knowledge/probe-lightrag-server",
+            json={"server_url": "http://localhost:9621", "api_key": "k"},
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["base_url"] == "http://localhost:9621"
+
+
+def test_connect_lightrag_server_registers_pointer(monkeypatch, tmp_path: Path) -> None:
+    manager = _FakeKBManager(tmp_path / "knowledge_bases")
+    monkeypatch.setattr(knowledge_router_module, "get_kb_manager", lambda: manager)
+    _patch_server_probe(monkeypatch, ok=True)
+
+    with TestClient(_build_app()) as client:
+        response = client.post(
+            "/api/v1/knowledge/connect-lightrag-server",
+            json={
+                "name": "remote-kb",
+                "server_url": "http://localhost:9621/",
+                "api_key": "secret",
+                "search_mode": "MIX",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rag_provider"] == "lightrag-server"
+    entry = manager.config["knowledge_bases"]["remote-kb"]
+    assert entry["type"] == "lightrag_server"
+    assert entry["server_url"] == "http://localhost:9621"
+    assert entry["search_mode"] == "mix"  # normalized + validated
+
+
+def test_connect_lightrag_server_rejects_unreachable(monkeypatch, tmp_path: Path) -> None:
+    manager = _FakeKBManager(tmp_path / "knowledge_bases")
+    monkeypatch.setattr(knowledge_router_module, "get_kb_manager", lambda: manager)
+    _patch_server_probe(monkeypatch, ok=False, error="Could not reach a LightRAG server")
+
+    with TestClient(_build_app()) as client:
+        response = client.post(
+            "/api/v1/knowledge/connect-lightrag-server",
+            json={"name": "bad", "server_url": "http://nope:9621"},
+        )
+
+    assert response.status_code == 400
+    assert "LightRAG" in response.json()["detail"]
+    assert "bad" not in manager.config["knowledge_bases"]
+
+
 def test_assert_not_connected_kb_blocks_connected_writes() -> None:
     from fastapi import HTTPException
 
     guard = knowledge_router_module._assert_not_connected_kb
-    for kind in ("linked", "obsidian"):
+    for kind in ("linked", "obsidian", "lightrag_server"):
         with pytest.raises(HTTPException) as excinfo:
             guard("kb", {"type": kind})
         assert excinfo.value.status_code == 409

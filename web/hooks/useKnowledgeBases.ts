@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  connectLightRagServer as connectLightRagServerApi,
   connectLinkedFolder as connectLinkedFolderApi,
   connectObsidianVault as connectObsidianApi,
   createKnowledgeBase as createKbApi,
@@ -320,6 +321,20 @@ export function useKnowledgeBases() {
     [load],
   );
 
+  const connectLightRagServer = useCallback(
+    async (params: {
+      name: string;
+      serverUrl: string;
+      apiKey?: string;
+      mode?: string;
+    }) => {
+      await connectLightRagServerApi(params);
+      invalidateKnowledgeCaches();
+      await load({ force: true, showSpinner: false });
+    },
+    [load],
+  );
+
   return {
     kbs: combinedKbs,
     rawKbs: kbs,
@@ -342,6 +357,7 @@ export function useKnowledgeBases() {
     deleteKb,
     connectObsidian,
     connectLinkedFolder,
+    connectLightRagServer,
   };
 }
 

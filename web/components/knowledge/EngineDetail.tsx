@@ -17,6 +17,7 @@ import {
   Loader2,
   Network,
   RefreshCw,
+  Server,
   Settings2,
   ShieldCheck,
   Workflow,
@@ -67,6 +68,7 @@ const ENGINE_ICONS: Record<string, LucideIcon> = {
   pageindex: Cloud,
   graphrag: Network,
   lightrag: Workflow,
+  "lightrag-server": Server,
 };
 
 const INSTALL_HINTS: Record<string, string> = {
@@ -90,16 +92,27 @@ const MODE_DESCRIPTIONS: Record<string, string> = {
   "lightrag:hybrid":
     "Combines local and global retrieval — a solid general default.",
   "lightrag:mix": "Fuses knowledge-graph and vector retrieval.",
+  "lightrag-server:naive":
+    "Plain vector retrieval, without the knowledge graph.",
+  "lightrag-server:local":
+    "Local context focused on the most relevant entities.",
+  "lightrag-server:global": "Theme-level retrieval over global relationships.",
+  "lightrag-server:hybrid":
+    "Combines local and global retrieval — a solid general default.",
+  "lightrag-server:mix":
+    "Fuses knowledge-graph and vector retrieval — the server's default.",
 };
 
 // Model kinds each engine needs (for the in-place pickers). "vision" isn't a
 // catalog service — it rides on the active chat model — so LightRAG only lists
-// llm + embedding and shows a vision note under the chat picker.
+// llm + embedding and shows a vision note under the chat picker. LightRAG Server
+// owns its own models on the remote instance, so it needs none here.
 const ENGINE_MODEL_KINDS: Record<string, ("llm" | "embedding")[]> = {
   llamaindex: ["embedding"],
   pageindex: [],
   graphrag: ["llm", "embedding"],
   lightrag: ["llm", "embedding"],
+  "lightrag-server": [],
 };
 
 const MODEL_KIND_LABEL: Record<string, string> = {

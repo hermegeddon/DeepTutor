@@ -766,7 +766,7 @@ interface ChatContextValue {
   switchBranch: (parentMessageId: number | null, childId: number) => void;
   renameSessionTitle: (title: string) => Promise<void>;
   newSession: () => void;
-  loadSession: (sessionId: string) => Promise<void>;
+  loadSession: (sessionId: string, signal?: AbortSignal) => Promise<void>;
   selectedSessionId: string | null;
   sessionStatuses: Record<string, SessionStatusSnapshot>;
   sidebarRefreshToken: number;
@@ -1215,8 +1215,8 @@ export function UnifiedChatProvider({
   );
 
   const loadSession = useCallback(
-    async (sessionId: string) => {
-      const session = await getSession(sessionId);
+    async (sessionId: string, signal?: AbortSignal) => {
+      const session = await getSession(sessionId, signal);
       const activeTurn = Array.isArray(session.active_turns)
         ? session.active_turns[0]
         : undefined;

@@ -650,6 +650,80 @@ export async function connectLinkedFolder(payload: {
   };
 }
 
+export interface LightRagServerProbe {
+  /** Reachable, a LightRAG server, and (if required) the API key is accepted. */
+  ok: boolean;
+  base_url: string;
+  reachable: boolean;
+  auth_required: boolean;
+  auth_ok: boolean;
+  core_version: string | null;
+  api_version: string | null;
+  /** Set when the server can't be connected (unreachable, bad key, …). */
+  error: string | null;
+}
+
+export async function probeLightRagServer(payload: {
+  serverUrl: string;
+  apiKey?: string;
+}): Promise<LightRagServerProbe> {
+  const res = await apiFetch(
+    apiUrl("/api/v1/knowledge/probe-lightrag-server"),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        server_url: payload.serverUrl,
+        api_key: payload.apiKey ?? "",
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      await readErrorDetail(res, "Failed to reach LightRAG server"),
+    );
+  }
+  return (await res.json()) as LightRagServerProbe;
+}
+
+export async function connectLightRagServer(payload: {
+  name: string;
+  serverUrl: string;
+  apiKey?: string;
+  mode?: string;
+}): Promise<{
+  status: string;
+  name: string;
+  server_url: string;
+  rag_provider: string;
+}> {
+  const res = await apiFetch(
+    apiUrl("/api/v1/knowledge/connect-lightrag-server"),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: payload.name,
+        server_url: payload.serverUrl,
+        api_key: payload.apiKey ?? "",
+        search_mode: payload.mode ?? "",
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      await readErrorDetail(res, "Failed to connect LightRAG server"),
+    );
+  }
+  invalidateKnowledgeCaches();
+  return (await res.json()) as {
+    status: string;
+    name: string;
+    server_url: string;
+    rag_provider: string;
+  };
+}
+
 export async function uploadKnowledgeBaseFiles(
   name: string,
   files: File[],

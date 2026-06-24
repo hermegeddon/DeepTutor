@@ -18,6 +18,7 @@ import sys
 from typing import Any
 
 from deeptutor.knowledge.kb_types import (
+    LIGHTRAG_SERVER_KB_TYPE,
     LINKED_KB_TYPE,
     OBSIDIAN_KB_TYPE,
     SUBAGENT_KB_TYPE,
@@ -27,6 +28,7 @@ from deeptutor.knowledge.kb_types import (
 from deeptutor.services.rag.factory import (
     DEFAULT_PROVIDER,
     KNOWN_PROVIDERS,
+    LIGHTRAG_SERVER_PROVIDER,
     has_ready_provider_index,
     normalize_provider_name,
     provider_uses_embedding_versions,
@@ -835,6 +837,57 @@ class KnowledgeBaseManager:
         self._save_config()
         return entry
 
+    def register_lightrag_server_kb(
+        self,
+        name: str,
+        server_url: str,
+        *,
+        api_key: str = "",
+        search_mode: str = "",
+        description: str = "",
+    ) -> dict:
+        """Register a pointer to an external LightRAG server as a connected KB.
+
+        Like the other connected types this creates no folder under ``base_dir``
+        and runs no index pipeline: it records a ``type: lightrag_server`` entry
+        whose ``server_url`` (+ optional ``api_key``) the ``lightrag-server``
+        provider queries over HTTP. The server owns indexing entirely. Callers
+        should validate reachability with the probe helper first; this only
+        guards basic invariants. Raises ``ValueError`` on a missing name/URL or a
+        name clash.
+        """
+        name = (name or "").strip()
+        server_url = (server_url or "").strip().rstrip("/")
+        if not name:
+            raise ValueError("Knowledge base name is required.")
+        if not server_url:
+            raise ValueError("LightRAG server URL is required.")
+
+        self.config = self._load_config()
+        knowledge_bases = self.config.setdefault("knowledge_bases", {})
+        if name in knowledge_bases:
+            raise ValueError(f"A knowledge base named '{name}' already exists.")
+
+        now = datetime.now().isoformat()
+        entry: dict[str, Any] = {
+            "path": name,
+            "type": LIGHTRAG_SERVER_KB_TYPE,
+            "rag_provider": LIGHTRAG_SERVER_PROVIDER,
+            "server_url": server_url,
+            "api_key": (api_key or "").strip(),
+            "description": description or f"LightRAG server: {name}",
+            "status": "ready",
+            "needs_reindex": False,
+            "created_at": now,
+            "updated_at": now,
+        }
+        search_mode = (search_mode or "").strip().lower()
+        if search_mode:
+            entry["search_mode"] = search_mode
+        knowledge_bases[name] = entry
+        self._save_config()
+        return entry
+
     def get_knowledge_base_path(self, name: str | None = None) -> Path:
         """Get path to a knowledge base.
 
@@ -977,6 +1030,9 @@ class KnowledgeBaseManager:
                 "type": kb_config.get("type"),
                 "vault_path": kb_config.get("vault_path"),
                 "external_path": kb_config.get("external_path"),
+                # LightRAG server pointer (the URL is safe to surface; the API
+                # key deliberately is not).
+                "server_url": kb_config.get("server_url"),
                 # Subagent connection fields (None for non-subagent KBs).
                 "agent_kind": kb_config.get("agent_kind"),
                 "cwd": kb_config.get("cwd"),
@@ -1105,6 +1161,10 @@ class KnowledgeBaseManager:
             metadata["external_path"] = kb_config.get("external_path")
         if kb_config.get("agent_kind"):
             metadata["agent_kind"] = kb_config.get("agent_kind")
+        # The server URL is shown read-only in the UI; the API key never leaves
+        # the backend, so it is deliberately not surfaced here.
+        if kb_config.get("server_url"):
+            metadata["server_url"] = kb_config.get("server_url")
 
         metadata.update(self._embedding_fields(kb_config))
 

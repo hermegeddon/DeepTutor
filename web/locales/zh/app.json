@@ -137,6 +137,8 @@
   "Notebooks": "笔记本",
   "Settings": "设置",
   "Loading": "加载中...",
+  "Loading conversation": "加载对话中…",
+  "Still loading…": "仍在加载中…",
   "Save": "保存",
   "Cancel": "取消",
   "Error": "错误",
@@ -2654,5 +2656,13 @@
   "Sign out": "退出登录",
   "End your session on this device": "结束此设备上的会话",
   "Failed to load profile": "加载个人资料失败",
-  "Image is too large": "图片过大"
+  "Image is too large": "图片过大",
+  "Server URL": "服务器地址",
+  "The base URL of your running LightRAG server. Documents are indexed there — nothing is uploaded or copied.": "你正在运行的 LightRAG 服务器的基础地址。文档在该服务器上建立索引——不会上传或复制任何内容。",
+  "Only if your server requires one": "仅当你的服务器需要时填写",
+  "Could not connect": "无法连接",
+  "Connected to LightRAG server": "已连接到 LightRAG 服务器",
+  "Core {{version}}": "内核 {{version}}",
+  "API key accepted": "API 密钥已通过",
+  "Open access": "开放访问"
 }

@@ -94,6 +94,18 @@ PROVIDER_CAPABILITIES: dict[str, dict[str, object]] = {
         "system_in_messages": True,
         "has_thinking_tags": True,  # DeepSeek reasoner has thinking tags
     },
+    # SiliconFlow exposes OpenAI-compatible chat completions for hosted models
+    # such as DeepSeek and Qwen; model-specific overrides below still govern
+    # response_format, thinking tags, and vision.
+    "siliconflow": {
+        "supports_response_format": True,
+        "supports_streaming": True,
+        "supports_tools": True,
+        "supports_vision": False,
+        "vision_url_supported": True,
+        "system_in_messages": True,
+        "has_thinking_tags": False,
+    },
     # VolcEngine Ark (Doubao) and BytePlus — OpenAI-compatible gateways that
     # host natively multimodal models (Doubao-Vision). ``supports_vision`` is
     # the Stage-2 fallback hint (see ``multimodal.py``), not a pre-flight gate:

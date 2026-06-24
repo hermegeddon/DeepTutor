@@ -27,14 +27,32 @@ _SUPPORTED = frozenset(
 _MODEL_DIR_HINTS = ("docling", "ds4sd")
 
 
+def _dir_nonempty(path: Path) -> bool:
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except Exception:
+        return False
+
+
+def docling_models_dir() -> Path:
+    """Docling's default model cache, where ``docling-tools models download``
+    writes (honors the ``DOCLING_CACHE_DIR`` override; default ~/.cache/docling).
+
+    Resolved without importing docling (heavy) so the readiness probe stays
+    cheap — it mirrors docling's own ``settings.cache_dir / "models"``."""
+    cache = os.environ.get("DOCLING_CACHE_DIR")
+    base = Path(cache).expanduser() if cache else Path.home() / ".cache" / "docling"
+    return base / "models"
+
+
 def _docling_models_ready() -> bool:
     """Best-effort, fail-closed check for downloaded Docling models."""
     artifacts = os.environ.get("DOCLING_ARTIFACTS_PATH")
-    if (
-        artifacts
-        and Path(artifacts).expanduser().is_dir()
-        and any(Path(artifacts).expanduser().iterdir())
-    ):
+    if artifacts and _dir_nonempty(Path(artifacts).expanduser()):
+        return True
+    # The location `docling-tools models download` populates (and that docling
+    # auto-loads from at parse time).
+    if _dir_nonempty(docling_models_dir()):
         return True
     hf_home = os.environ.get("HF_HOME")
     hub = (
@@ -89,7 +107,7 @@ class DoclingParser:
             ready=False,
             reason="models_missing",
             message=(
-                "Docling models aren't downloaded. Enable “Allow local model "
+                "Docling models aren't downloaded. Enable “Allow automatic model "
                 "download” in Settings → Document Parsing (or pre-fetch with "
                 "`docling-tools models download`), or switch to text-only / markitdown."
             ),

@@ -13,6 +13,7 @@ import {
   Network,
   Plus,
   Search,
+  Server,
   Star,
   Workflow,
   type LucideIcon,
@@ -42,6 +43,7 @@ const ENGINE_ICONS: Record<string, LucideIcon> = {
   pageindex: Cloud,
   graphrag: Network,
   lightrag: Workflow,
+  "lightrag-server": Server,
 };
 
 type EngineStatus = "ready" | "needs_key" | "unavailable";

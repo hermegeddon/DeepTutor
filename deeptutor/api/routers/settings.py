@@ -192,6 +192,12 @@ class DocumentParsingTest(BaseModel):
     engine: Optional[str] = None
 
 
+class DocumentParsingInstall(BaseModel):
+    """One-click pip install of an optional parser engine's package(s)."""
+
+    engine: str
+
+
 def _invalidate_runtime_caches() -> None:
     """Force runtime clients/config to pick up the latest saved catalog.
 
@@ -502,6 +508,10 @@ def _document_parsing_payload() -> dict[str, Any]:
     """State for the Document Parsing settings page: active engine, all engine
     slices (MinerU token redacted), engine availability, and per-engine
     readiness (so the UI can surface the "models not downloaded" gate)."""
+    from deeptutor.services.parsing.engines._install import (
+        installable_engines,
+        model_downloadable_engines,
+    )
     from deeptutor.services.parsing.engines.factory import (
         get_parser,
         list_engines,
@@ -540,6 +550,9 @@ def _document_parsing_payload() -> dict[str, Any]:
         "engines": redacted,
         "available_engines": available,
         "readiness": readiness,
+        # Engine ids that support one-click pip install / model download here.
+        "installable": sorted(installable_engines()),
+        "model_downloadable": sorted(model_downloadable_engines()),
         # MinerU-specific UI state (token presence + CLI probe).
         "mineru": {
             "api_token_set": bool(mineru_slice.get("api_token")),
@@ -630,6 +643,76 @@ async def test_document_parsing(payload: DocumentParsingTest):
         "ok": report.ready,
         "message": report.message or ("Ready to parse." if report.ready else "Not ready."),
     }
+
+
+def _normalize_engine_name(name: str) -> str:
+    return (name or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+@router.post("/document-parsing/install")
+async def start_document_parsing_install(payload: DocumentParsingInstall):
+    """Kick off a one-click ``pip install`` of an optional engine's package(s).
+
+    Returns ``{ok, message}`` immediately; progress is polled via the shared job
+    status endpoint. Only one job runs at a time (process-wide singleton). The
+    engine must be in the install allow-list (``ENGINE_PIP_SPECS``)."""
+    _require_settings_admin()
+    from deeptutor.services.parsing.engines._install import (
+        ENGINE_PIP_SPECS,
+        get_background_job_manager,
+    )
+
+    engine = _normalize_engine_name(payload.engine)
+    specs = ENGINE_PIP_SPECS.get(engine)
+    if not specs:
+        return {"ok": False, "message": f"No installable package for engine '{engine}'."}
+    return get_background_job_manager().start_install(engine=engine, specs=specs)
+
+
+@router.post("/document-parsing/models/download")
+async def start_document_parsing_model_download(payload: DocumentParsingInstall):
+    """Kick off a one-click model-weight download for an engine (e.g. Docling).
+
+    Runs the engine's downloader console script (``docling-tools models
+    download``) as a background subprocess; progress is polled via the shared job
+    status endpoint. The engine must be in ``ENGINE_MODEL_DOWNLOADERS`` and its
+    script reachable next to the server's python or on PATH."""
+    _require_settings_admin()
+    from deeptutor.services.parsing.engines._install import (
+        get_background_job_manager,
+        model_downloadable_engines,
+        resolve_model_downloader,
+    )
+
+    engine = _normalize_engine_name(payload.engine)
+    if engine not in model_downloadable_engines():
+        return {"ok": False, "message": f"No model download for engine '{engine}'."}
+    cmd = resolve_model_downloader(engine)
+    if not cmd:
+        return {
+            "ok": False,
+            "message": (
+                f"The {engine} model downloader wasn't found. Reinstall the engine "
+                f"(pip install deeptutor[parse-{engine}]) so its CLI is on PATH."
+            ),
+        }
+    return get_background_job_manager().start_model_download(engine=engine, cmd=cmd)
+
+
+@router.get("/document-parsing/job/status")
+async def document_parsing_job_status(cursor: int = 0):
+    _require_settings_admin()
+    from deeptutor.services.parsing.engines._install import get_background_job_manager
+
+    return get_background_job_manager().status(cursor)
+
+
+@router.post("/document-parsing/job/cancel")
+async def cancel_document_parsing_job():
+    _require_settings_admin()
+    from deeptutor.services.parsing.engines._install import get_background_job_manager
+
+    return get_background_job_manager().cancel()
 
 
 @router.post("/mineru/models/download")

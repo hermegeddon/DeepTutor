@@ -119,12 +119,7 @@ def test_retrieve_nodes_rejects_invalid_persisted_embeddings(
         as_retriever=lambda similarity_top_k=5: _RetrieverShouldNotRun(),
     )
 
-    monkeypatch.setattr(
-        storage_module.StorageContext,
-        "from_defaults",
-        lambda persist_dir: object(),
-    )
-    monkeypatch.setattr(storage_module, "load_index_from_storage", lambda _ctx: fake_index)
+    monkeypatch.setattr(storage_module.vector_store, "load_index", lambda _dir: fake_index)
 
     with pytest.raises(ValueError, match="RAG index contains invalid embedding vectors"):
         storage_module.retrieve_nodes(tmp_path, "what is this?")
@@ -163,12 +158,7 @@ def test_retrieve_nodes_checks_storage_context_vector_stores(
         as_retriever=lambda similarity_top_k=5: _RetrieverShouldNotRun(),
     )
 
-    monkeypatch.setattr(
-        storage_module.StorageContext,
-        "from_defaults",
-        lambda persist_dir: object(),
-    )
-    monkeypatch.setattr(storage_module, "load_index_from_storage", lambda _ctx: fake_index)
+    monkeypatch.setattr(storage_module.vector_store, "load_index", lambda _dir: fake_index)
 
     with pytest.raises(ValueError, match="RAG index contains invalid embedding vectors"):
         storage_module.retrieve_nodes(tmp_path, "what is this?")

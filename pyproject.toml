@@ -38,6 +38,11 @@ dependencies = [
     "oauth-cli-kit>=0.1.1",
     "llama-index>=0.14.12",
     "llama-index-retrievers-bm25>=0.7.1,<0.8.0",
+    # FAISS vector store: vectorized ANN retrieval that replaces SimpleVectorStore's
+    # brute-force per-query scan for large knowledge bases (issue #552). The
+    # pipeline imports it lazily and falls back to SimpleVectorStore if absent.
+    "llama-index-vector-stores-faiss>=0.4.0,<1.0.0",
+    "faiss-cpu>=1.8.0,<2.0.0",
     "PyMuPDF>=1.26.0",
     "numpy>=1.24.0,<3.0.0",
     "arxiv>=2.0.0",
@@ -75,6 +80,11 @@ cli = [
     # RAG (LlamaIndex)
     "llama-index>=0.14.12",
     "llama-index-retrievers-bm25>=0.7.1,<0.8.0",
+    # FAISS vector store: vectorized ANN retrieval that replaces SimpleVectorStore's
+    # brute-force per-query scan for large knowledge bases (issue #552). The
+    # pipeline imports it lazily and falls back to SimpleVectorStore if absent.
+    "llama-index-vector-stores-faiss>=0.4.0,<1.0.0",
+    "faiss-cpu>=1.8.0,<2.0.0",
     "PyMuPDF>=1.26.0",
     "numpy>=1.24.0,<3.0.0",
     "arxiv>=2.0.0",
@@ -140,7 +150,17 @@ partners = [
 # absent engine simply reports unavailable in Settings → Document Parsing.
 parse-markitdown = ["markitdown[pdf,docx,pptx,xlsx]>=0.0.1a2"]
 parse-docling = ["docling>=2.0.0"]
-parse = ["deeptutor[parse-markitdown]", "deeptutor[parse-docling]"]
+# PyMuPDF4LLM rides on PyMuPDF (already a core dep); the extra adds only the
+# thin Markdown layer, so it is the lightest image-capable engine. Pinned to the
+# pre-1.0 line on purpose: 1.x defaults to an onnxruntime layout-AI path that
+# pulls a heavy dep, downloads a model, and can't extract images — defeating the
+# "lightweight, runs on a Pi, extracts images" point of this engine.
+parse-pymupdf4llm = ["pymupdf4llm>=0.0.17,<1.0"]
+parse = [
+    "deeptutor[parse-markitdown]",
+    "deeptutor[parse-docling]",
+    "deeptutor[parse-pymupdf4llm]",
+]
 
 # Legacy alias kept for one release: `pip install deeptutor[tutorbot]`.
 tutorbot = ["deeptutor[partners]"]

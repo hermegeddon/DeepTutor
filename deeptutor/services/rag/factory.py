@@ -11,6 +11,9 @@ today:
 * ``lightrag``            — graph + vector retrieval (HKUDS/LightRAG, multimodal
                             via RAG-Anything); optional dependency,
                             ``pip install 'deeptutor[rag-lightrag]'``.
+* ``lightrag-server``     — retrieval offloaded to an external, standalone
+                            LightRAG server the user runs. No local index: each
+                            KB is a connection pointer queried over HTTP.
 
 A KB is bound to one provider at creation time; later adds and retrieval always
 go through that same pipeline (enforced upstream in the knowledge router).
@@ -25,11 +28,18 @@ DEFAULT_PROVIDER = "llamaindex"
 PAGEINDEX_PROVIDER = "pageindex"
 GRAPHRAG_PROVIDER = "graphrag"
 LIGHTRAG_PROVIDER = "lightrag"
+LIGHTRAG_SERVER_PROVIDER = "lightrag-server"
 
 # Providers the factory can instantiate. Unknown / legacy strings fall back to
 # the default with a re-index hint upstream.
 KNOWN_PROVIDERS = frozenset(
-    {DEFAULT_PROVIDER, PAGEINDEX_PROVIDER, GRAPHRAG_PROVIDER, LIGHTRAG_PROVIDER}
+    {
+        DEFAULT_PROVIDER,
+        PAGEINDEX_PROVIDER,
+        GRAPHRAG_PROVIDER,
+        LIGHTRAG_PROVIDER,
+        LIGHTRAG_SERVER_PROVIDER,
+    }
 )
 
 # Cached pipeline instances keyed by (kb_base_dir, provider).
@@ -69,6 +79,7 @@ def version_matches_provider(entry: dict[str, Any], provider: Optional[str]) -> 
             PAGEINDEX_PROVIDER,
             GRAPHRAG_PROVIDER,
             LIGHTRAG_PROVIDER,
+            LIGHTRAG_SERVER_PROVIDER,
         }
 
     return entry_provider == resolved or signature == resolved
@@ -121,6 +132,13 @@ def _build_pipeline(provider: str, kb_base_dir: Optional[str], **kwargs: Any):
         if kb_base_dir is not None:
             kwargs.setdefault("kb_base_dir", kb_base_dir)
         return LightRagPipeline(**kwargs)
+
+    if provider == LIGHTRAG_SERVER_PROVIDER:
+        from .pipelines.lightrag_server.pipeline import LightRagServerPipeline
+
+        if kb_base_dir is not None:
+            kwargs.setdefault("kb_base_dir", kb_base_dir)
+        return LightRagServerPipeline(**kwargs)
 
     from .pipelines.llamaindex.pipeline import LlamaIndexPipeline
 
@@ -175,6 +193,14 @@ def list_pipelines() -> List[Dict[str, Any]]:
     except Exception:
         lightrag_ready, lightrag_modes, lightrag_default_mode = False, [], ""
 
+    try:
+        from .pipelines.lightrag_server import config as lightrag_server_config
+
+        lightrag_server_modes = list(lightrag_server_config.SUPPORTED_MODES)
+        lightrag_server_default_mode = lightrag_server_config.DEFAULT_MODE
+    except Exception:
+        lightrag_server_modes, lightrag_server_default_mode = [], ""
+
     return [
         {
             "id": DEFAULT_PROVIDER,
@@ -208,6 +234,17 @@ def list_pipelines() -> List[Dict[str, Any]]:
             "modes": lightrag_modes,
             "default_mode": lightrag_default_mode,
         },
+        {
+            "id": LIGHTRAG_SERVER_PROVIDER,
+            "name": "LightRAG Server",
+            "description": "Retrieval offloaded to an external, standalone LightRAG server you run. No local index — connect a KB to its URL and query it over HTTP (naive/local/global/hybrid/mix).",
+            # Always available: it's a thin HTTP client with no install or global
+            # credential. The endpoint is configured per-KB at connect time.
+            "configured": True,
+            "requires_api_key": False,
+            "modes": lightrag_server_modes,
+            "default_mode": lightrag_server_default_mode,
+        },
     ]
 
 
@@ -216,6 +253,7 @@ __all__ = [
     "PAGEINDEX_PROVIDER",
     "GRAPHRAG_PROVIDER",
     "LIGHTRAG_PROVIDER",
+    "LIGHTRAG_SERVER_PROVIDER",
     "KNOWN_PROVIDERS",
     "get_pipeline",
     "has_ready_provider_index",

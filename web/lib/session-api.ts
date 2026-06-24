@@ -156,9 +156,13 @@ export async function listSessions(
   );
 }
 
-export async function getSession(sessionId: string): Promise<SessionDetail> {
+export async function getSession(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionDetail> {
   const response = await apiFetch(apiUrl(`/api/v1/sessions/${sessionId}`), {
     cache: "no-store",
+    signal,
   });
   return expectJson<SessionDetail>(response);
 }

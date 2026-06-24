@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertTriangle,
@@ -10,11 +10,14 @@ import {
   Link2,
   Loader2,
   Plus,
+  Server,
 } from "lucide-react";
 import Modal from "@/components/common/Modal";
 import {
+  probeLightRagServer,
   probeLinkedFolder,
   type KnowledgeUploadPolicy,
+  type LightRagServerProbe,
   type LinkedFolderProbe,
   type RagProviderSummary,
 } from "@/lib/knowledge-api";
@@ -23,8 +26,10 @@ import FileDropZone from "./FileDropZone";
 
 const PAGEINDEX_FORMATS = [".pdf", ".md", ".markdown"];
 const OBSIDIAN_SOURCE = "obsidian";
+const LIGHTRAG_SERVER_PROVIDER = "lightrag-server";
 const EXAMPLE_INDEX_PATH = "/Users/you/knowledge_bases/my-kb";
 const EXAMPLE_VAULT_PATH = "/Users/you/Documents/MyVault";
+const EXAMPLE_SERVER_URL = "http://localhost:9621";
 
 type Mode = "new" | "link";
 
@@ -49,6 +54,13 @@ interface CreateKbModalProps {
     name: string;
     vaultPath: string;
   }) => Promise<void>;
+  /** Connect an external LightRAG server (retrieval only, no local index). */
+  onConnectLightRagServer: (params: {
+    name: string;
+    serverUrl: string;
+    apiKey?: string;
+    mode?: string;
+  }) => Promise<void>;
   /** Open the RAG pipeline settings (to add a missing API key). */
   onConfigureProvider?: () => void;
   /** Open straight into a given mode (e.g. "link" from the Obsidian card). */
@@ -65,6 +77,7 @@ export default function CreateKbModal({
   onCreate,
   onConnectLinkedFolder,
   onConnectObsidian,
+  onConnectLightRagServer,
   onConfigureProvider,
   initialMode = "new",
   initialSource,
@@ -79,6 +92,14 @@ export default function CreateKbModal({
   const [folderPath, setFolderPath] = useState("");
   const [probe, setProbe] = useState<LinkedFolderProbe | null>(null);
   const [probing, setProbing] = useState(false);
+  // LightRAG Server engine (new mode): a connection instead of an upload.
+  const [serverUrl, setServerUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [serverMode, setServerMode] = useState("");
+  const [serverProbe, setServerProbe] = useState<LightRagServerProbe | null>(
+    null,
+  );
+  const [serverProbing, setServerProbing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,11 +111,16 @@ export default function CreateKbModal({
     setName("");
     setFiles([]);
     setError(null);
-    setProvider(providers[0]?.id || "llamaindex");
+    setProvider(initialSource || providers[0]?.id || "llamaindex");
     setLinkSource(initialSource || firstLinkable || OBSIDIAN_SOURCE);
     setFolderPath("");
     setProbe(null);
     setProbing(false);
+    setServerUrl("");
+    setApiKey("");
+    setServerMode("");
+    setServerProbe(null);
+    setServerProbing(false);
   }, [isOpen, providers, firstLinkable, initialMode, initialSource]);
 
   // A fresh path / source invalidates a stale probe verdict.
@@ -102,12 +128,21 @@ export default function CreateKbModal({
     setProbe(null);
   }, [folderPath, linkSource]);
 
+  // A fresh URL / key invalidates a stale server connection test.
+  useEffect(() => {
+    setServerProbe(null);
+  }, [serverUrl, apiKey]);
+
   // ---- New mode (build a fresh index) ----------------------------------
   const activeProvider = providers.find((p) => p.id === provider);
   const providerNeedsKey =
     !!activeProvider?.requires_api_key && activeProvider?.configured === false;
   const providerUnavailable = activeProvider?.configured === false;
   const isPageIndex = provider === "pageindex";
+  const isLightRagServer = provider === LIGHTRAG_SERVER_PROVIDER;
+  const serverModeOptions = activeProvider?.modes ?? [];
+  const effectiveServerMode =
+    serverMode || activeProvider?.default_mode || serverModeOptions[0] || "";
 
   const policyForProvider: KnowledgeUploadPolicy = isPageIndex
     ? {
@@ -124,10 +159,16 @@ export default function CreateKbModal({
   const trimmed = name.trim();
   const trimmedPath = folderPath.trim();
 
+  const trimmedServerUrl = serverUrl.trim();
+
   const canSubmit = (() => {
     if (submitting) return false;
     if (!trimmed) return false;
     if (mode === "new") {
+      if (isLightRagServer) {
+        // The connection must pass the test before a KB is bound to it.
+        return !!trimmedServerUrl && !!serverProbe?.ok;
+      }
       return !providerUnavailable && selection.validFiles.length > 0;
     }
     if (!trimmedPath) return false;
@@ -153,17 +194,43 @@ export default function CreateKbModal({
     }
   };
 
+  const handleTestServer = async () => {
+    if (!trimmedServerUrl || serverProbing) return;
+    setServerProbing(true);
+    setError(null);
+    try {
+      const result = await probeLightRagServer({
+        serverUrl: trimmedServerUrl,
+        apiKey: apiKey.trim(),
+      });
+      setServerProbe(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setServerProbing(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
     try {
       if (mode === "new") {
-        await onCreate({
-          name: trimmed,
-          provider,
-          files: selection.validFiles,
-        });
+        if (isLightRagServer) {
+          await onConnectLightRagServer({
+            name: trimmed,
+            serverUrl: trimmedServerUrl,
+            apiKey: apiKey.trim(),
+            mode: effectiveServerMode,
+          });
+        } else {
+          await onCreate({
+            name: trimmed,
+            provider,
+            files: selection.validFiles,
+          });
+        }
       } else if (linkIsObsidian) {
         await onConnectObsidian({ name: trimmed, vaultPath: trimmedPath });
       } else {
@@ -182,7 +249,13 @@ export default function CreateKbModal({
   };
 
   const submitLabel =
-    mode === "new" ? t("Create") : linkIsObsidian ? t("Connect") : t("Link");
+    mode === "new"
+      ? isLightRagServer
+        ? t("Connect")
+        : t("Create")
+      : linkIsObsidian
+        ? t("Connect")
+        : t("Link");
 
   return (
     <Modal
@@ -211,7 +284,7 @@ export default function CreateKbModal({
           >
             {submitting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : mode === "new" ? (
+            ) : mode === "new" && !isLightRagServer ? (
               <Plus size={14} />
             ) : (
               <Link2 size={14} />
@@ -257,6 +330,24 @@ export default function CreateKbModal({
             files={files}
             setFiles={setFiles}
             policyForProvider={policyForProvider}
+            connectionForm={
+              isLightRagServer ? (
+                <LightRagServerFields
+                  serverUrl={serverUrl}
+                  setServerUrl={setServerUrl}
+                  apiKey={apiKey}
+                  setApiKey={setApiKey}
+                  serverMode={effectiveServerMode}
+                  setServerMode={setServerMode}
+                  modeOptions={serverModeOptions}
+                  submitting={submitting}
+                  probing={serverProbing}
+                  probe={serverProbe}
+                  onTest={handleTestServer}
+                  t={t}
+                />
+              ) : null
+            }
             t={t}
           />
         ) : (
@@ -364,6 +455,7 @@ function NewModeFields({
   files,
   setFiles,
   policyForProvider,
+  connectionForm,
   t,
 }: {
   providers: RagProviderSummary[];
@@ -377,6 +469,8 @@ function NewModeFields({
   files: File[];
   setFiles: (files: File[]) => void;
   policyForProvider: KnowledgeUploadPolicy;
+  /** When set, replaces the upload step (e.g. a server connection form). */
+  connectionForm?: ReactNode;
   t: TFn;
 }) {
   return (
@@ -450,23 +544,166 @@ function NewModeFields({
         )}
       </div>
 
+      {connectionForm ?? (
+        <div>
+          <label className="mb-2 block text-[11px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
+            {t("Initial documents")}
+            {isPageIndex && (
+              <span className="ml-2 normal-case tracking-normal text-[var(--muted-foreground)]/80">
+                · {t("PDF and Markdown only")}
+              </span>
+            )}
+          </label>
+          <FileDropZone
+            files={files}
+            onChange={setFiles}
+            uploadPolicy={policyForProvider}
+            disabled={submitting}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+function LightRagServerFields({
+  serverUrl,
+  setServerUrl,
+  apiKey,
+  setApiKey,
+  serverMode,
+  setServerMode,
+  modeOptions,
+  submitting,
+  probing,
+  probe,
+  onTest,
+  t,
+}: {
+  serverUrl: string;
+  setServerUrl: (value: string) => void;
+  apiKey: string;
+  setApiKey: (value: string) => void;
+  serverMode: string;
+  setServerMode: (value: string) => void;
+  modeOptions: string[];
+  submitting: boolean;
+  probing: boolean;
+  probe: LightRagServerProbe | null;
+  onTest: () => void;
+  t: TFn;
+}) {
+  return (
+    <div className="space-y-3">
       <div>
-        <label className="mb-2 block text-[11px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
-          {t("Initial documents")}
-          {isPageIndex && (
-            <span className="ml-2 normal-case tracking-normal text-[var(--muted-foreground)]/80">
-              · {t("PDF and Markdown only")}
-            </span>
-          )}
+        <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
+          {t("Server URL")}
         </label>
-        <FileDropZone
-          files={files}
-          onChange={setFiles}
-          uploadPolicy={policyForProvider}
+        <div className="flex gap-2">
+          <input
+            value={serverUrl}
+            onChange={(event) => setServerUrl(event.target.value)}
+            disabled={submitting}
+            placeholder={EXAMPLE_SERVER_URL}
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 font-mono text-[12.5px] text-[var(--foreground)] outline-none transition-colors focus:border-[var(--foreground)]/25 disabled:opacity-50"
+          />
+          <button
+            type="button"
+            onClick={onTest}
+            disabled={submitting || probing || serverUrl.trim().length === 0}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-[12px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {probing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Server className="h-3.5 w-3.5" />
+            )}
+            {t("Test connection")}
+          </button>
+        </div>
+        <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+          {t(
+            "The base URL of your running LightRAG server. Documents are indexed there — nothing is uploaded or copied.",
+          )}
+        </p>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
+          {t("API key")}
+          <span className="ml-2 normal-case tracking-normal text-[var(--muted-foreground)]/80">
+            · {t("optional")}
+          </span>
+        </label>
+        <input
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
           disabled={submitting}
+          type="password"
+          autoComplete="off"
+          placeholder={t("Only if your server requires one")}
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-[12.5px] text-[var(--foreground)] outline-none transition-colors focus:border-[var(--foreground)]/25 disabled:opacity-50"
         />
       </div>
-    </>
+
+      {modeOptions.length > 0 && (
+        <div>
+          <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
+            {t("Retrieval mode")}
+          </label>
+          <select
+            value={serverMode}
+            onChange={(event) => setServerMode(event.target.value)}
+            disabled={submitting}
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-[12.5px] text-[var(--foreground)] outline-none transition-colors focus:border-[var(--foreground)]/25 disabled:opacity-50"
+          >
+            {modeOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {probe && <ServerProbeVerdict probe={probe} t={t} />}
+    </div>
+  );
+}
+
+function ServerProbeVerdict({
+  probe,
+  t,
+}: {
+  probe: LightRagServerProbe;
+  t: TFn;
+}) {
+  if (!probe.ok) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+        <span className="flex items-center gap-1.5 font-medium">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          {t("Could not connect")}
+        </span>
+        {probe.error && <p className="mt-1 leading-relaxed">{probe.error}</p>}
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2.5 text-[12px]">
+      <div className="flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-300">
+        <Check className="h-3.5 w-3.5 shrink-0" />
+        {t("Connected to LightRAG server")}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-[var(--muted-foreground)]">
+        {probe.core_version && (
+          <span>{t("Core {{version}}", { version: probe.core_version })}</span>
+        )}
+        <span>
+          {probe.auth_required ? t("API key accepted") : t("Open access")}
+        </span>
+      </div>
+    </div>
   );
 }
 

@@ -38,6 +38,7 @@ export default function KnowledgePage() {
     deleteKb,
     connectObsidian,
     connectLinkedFolder,
+    connectLightRagServer,
   } = useKnowledgeBases();
 
   // Connected subagents are stored as ``type: subagent`` KBs so the chat
@@ -303,6 +304,7 @@ export default function KnowledgePage() {
         onCreate={handleCreate}
         onConnectLinkedFolder={connectLinkedFolder}
         onConnectObsidian={connectObsidian}
+        onConnectLightRagServer={connectLightRagServer}
         initialMode={createPreset?.mode}
         initialSource={createPreset?.source}
         onConfigureProvider={() => {

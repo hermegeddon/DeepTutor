@@ -137,6 +137,8 @@
   "Notebooks": "Notebooks",
   "Settings": "Settings",
   "Loading": "Loading...",
+  "Loading conversation": "Loading conversation…",
+  "Still loading…": "Still loading…",
   "Save": "Save",
   "Cancel": "Cancel",
   "Error": "Error",
@@ -2654,5 +2656,13 @@
   "Sign out": "Sign out",
   "End your session on this device": "End your session on this device",
   "Failed to load profile": "Failed to load profile",
-  "Image is too large": "Image is too large"
+  "Image is too large": "Image is too large",
+  "Server URL": "Server URL",
+  "The base URL of your running LightRAG server. Documents are indexed there — nothing is uploaded or copied.": "The base URL of your running LightRAG server. Documents are indexed there — nothing is uploaded or copied.",
+  "Only if your server requires one": "Only if your server requires one",
+  "Could not connect": "Could not connect",
+  "Connected to LightRAG server": "Connected to LightRAG server",
+  "Core {{version}}": "Core {{version}}",
+  "API key accepted": "API key accepted",
+  "Open access": "Open access"
 }

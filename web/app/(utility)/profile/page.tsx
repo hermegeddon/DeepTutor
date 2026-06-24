@@ -209,15 +209,15 @@ export default function ProfilePage() {
     <div className="h-screen overflow-y-auto bg-[var(--background)] px-4 py-10 [scrollbar-gutter:stable]">
       <div className="mx-auto max-w-2xl">
         {/* Header */}
-        <div className="mb-8 flex items-center gap-4">
+        <div className="mb-8">
           <Link
             href="/"
-            className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+            className="mb-4 inline-flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
           >
-            <ArrowLeft size={15} />
+            <ArrowLeft size={16} />
             {t("Back")}
           </Link>
-          <div className="flex-1">
+          <div>
             <h1 className="text-xl font-semibold text-[var(--foreground)]">
               {t("My profile")}
             </h1>
