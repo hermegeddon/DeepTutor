@@ -121,8 +121,13 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Copy requirements and install Python dependencies
 COPY requirements/ ./requirements/
 COPY requirements.txt ./
+ARG DEEPTUTOR_EXTRA_REQUIREMENTS=""
 RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install -r requirements.txt && \
+    if [ -n "$DEEPTUTOR_EXTRA_REQUIREMENTS" ]; then \
+        echo "Installing extra Python requirements from ${DEEPTUTOR_EXTRA_REQUIREMENTS}"; \
+        pip install -r "$DEEPTUTOR_EXTRA_REQUIREMENTS"; \
+    fi
 
 # ============================================
 # Stage 3: Production Image

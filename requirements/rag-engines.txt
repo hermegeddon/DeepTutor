@@ -1,0 +1,16 @@
+# ============================================
+# DeepTutor Optional Local RAG Engine Dependencies
+# ============================================
+# Mirrors pyproject.toml optional dependencies:
+#   [project.optional-dependencies].graphrag
+#   [project.optional-dependencies].rag-lightrag
+#
+# These engines are intentionally opt-in because they are heavy. Use this file
+# from Docker/CI builds via Dockerfile ARG DEEPTUTOR_EXTRA_REQUIREMENTS when a
+# deployment wants local GraphRAG and LightRAG/RAG-Anything providers baked in.
+
+# --- GraphRAG knowledge-base engine (microsoft/graphrag) ---
+graphrag>=3.0.0,<4.0.0
+
+# --- LightRAG/RAG-Anything knowledge-base engine (HKUDS) ---
+raganything>=1.0.0
