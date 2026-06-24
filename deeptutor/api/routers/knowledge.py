@@ -36,7 +36,7 @@ from deeptutor.api.utils.task_log_stream import capture_task_logs, get_task_stre
 from deeptutor.knowledge.add_documents import DocumentAdder
 from deeptutor.knowledge.initializer import KnowledgeBaseInitializer
 from deeptutor.knowledge.kb_types import is_connected_kb
-from deeptutor.knowledge.manager import KnowledgeBaseManager
+from deeptutor.knowledge.manager import KnowledgeBaseManager, coerce_stale_progress_to_error
 from deeptutor.knowledge.naming import validate_knowledge_base_name
 from deeptutor.knowledge.progress_tracker import ProgressStage, ProgressTracker
 from deeptutor.multi_user.context import get_current_user
@@ -1620,6 +1620,11 @@ async def connect_lightrag_server_route(payload: ConnectLightRagServerRequest):
 @router.get("/list", response_model=list[KnowledgeBaseInfo])
 async def list_knowledge_bases():
     """List all available knowledge bases with their details."""
+    return await asyncio.to_thread(_list_knowledge_bases_sync)
+
+
+def _list_knowledge_bases_sync():
+    """Synchronous implementation for the heavy KB list/info scan."""
     try:
         manager = get_kb_manager()
         kb_names = manager.list_knowledge_bases()
@@ -2416,6 +2421,14 @@ async def retry_knowledge_base(
         kb_entry = _load_kb_entry_or_404(manager, resolved_name)
         status = str(kb_entry.get("status") or "").lower()
         progress = kb_entry.get("progress") if isinstance(kb_entry.get("progress"), dict) else {}
+        stale_progress = coerce_stale_progress_to_error(
+            status,
+            progress,
+            updated_at=kb_entry.get("updated_at"),
+        )
+        if stale_progress:
+            status = "error"
+            progress = stale_progress
         progress_stage = str(progress.get("stage") or "").lower()
         if status != "error" and progress_stage != "error":
             raise HTTPException(
@@ -2490,6 +2503,9 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
         try:
             kb_info = KnowledgeBaseManager(base_dir=str(base_dir)).get_info(kb_name)
             kb_is_ready = bool(kb_info.get("statistics", {}).get("rag_initialized"))
+            normalized_progress = kb_info.get("progress")
+            if isinstance(normalized_progress, dict):
+                initial_progress = normalized_progress
         except Exception:
             kb_is_ready = False
 
@@ -2507,7 +2523,28 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
                     except Exception:
                         pass
 
-        if not has_active_task and not expected_task_id:
+        if (
+            expected_task_id
+            and initial_progress
+            and initial_progress.get("task_id")
+            and initial_progress.get("task_id") != expected_task_id
+        ):
+            await websocket.send_json(
+                {
+                    "type": "progress",
+                    "data": {
+                        "stage": "error",
+                        "message": "Requested knowledge-base task is no longer active.",
+                        "error": (
+                            "The requested progress task has been replaced or is no longer active."
+                        ),
+                        "stale": True,
+                    },
+                }
+            )
+            return
+
+        if not has_active_task:
             if kb_is_ready:
                 await websocket.send_json(
                     {

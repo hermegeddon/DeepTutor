@@ -49,6 +49,84 @@ logger = logging.getLogger(__name__)
 # let a list-call mid-creation racy-delete the entry. 60s is comfortably longer
 # than the create handshake while still keeping multi-day zombies out.
 _ORPHAN_PRUNE_GRACE_SECONDS = 60
+_STALE_PROGRESS_SECONDS = 5 * 60
+_LIVE_KB_STATUSES = {"initializing", "processing"}
+_TERMINAL_PROGRESS_STAGES = {"completed", "error"}
+
+
+def _parse_progress_time(progress: dict | None, updated_at: str | None = None) -> datetime | None:
+    """Return the best timestamp for a live progress snapshot, if parseable."""
+    candidates: list[Any] = []
+    if isinstance(progress, dict):
+        candidates.append(progress.get("timestamp"))
+    candidates.append(updated_at)
+
+    for raw in candidates:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+    return None
+
+
+def coerce_stale_progress_to_error(
+    status: str | None,
+    progress: dict | None,
+    *,
+    updated_at: str | None = None,
+    now: datetime | None = None,
+    max_age_seconds: int = _STALE_PROGRESS_SECONDS,
+) -> dict | None:
+    """Return an error progress snapshot when a persisted live task is stale.
+
+    Background KB tasks are in-process. If the API worker restarts or crashes
+    while a KB is ``initializing``/``processing``, the persisted progress can
+    keep advertising a task ID that no process can ever complete. Treat those
+    old non-terminal snapshots as a terminal error on read so the UI stops
+    opening never-ending progress sockets and can offer Retry/Re-index instead.
+    """
+    if status not in _LIVE_KB_STATUSES or not isinstance(progress, dict):
+        return None
+    if progress.get("stage") in _TERMINAL_PROGRESS_STAGES:
+        return None
+
+    progress_time = _parse_progress_time(progress, updated_at)
+    if progress_time is None:
+        return None
+
+    reference_now = now
+    if reference_now is None:
+        reference_now = (
+            datetime.now(progress_time.tzinfo) if progress_time.tzinfo else datetime.now()
+        )
+    try:
+        age_seconds = (reference_now - progress_time).total_seconds()
+    except TypeError:
+        age_seconds = (
+            reference_now.replace(tzinfo=None) - progress_time.replace(tzinfo=None)
+        ).total_seconds()
+    if age_seconds <= max_age_seconds:
+        return None
+
+    last_progress_at = progress.get("timestamp") or updated_at
+    message = "Previous knowledge-base task appears stale. Re-index this knowledge base to continue."
+    stale_progress = dict(progress)
+    stale_progress.update(
+        {
+            "stage": "error",
+            "message": message,
+            "error": (
+                f"{message} Last progress update: {last_progress_at or 'unknown'}."
+            ),
+            "stale": True,
+            "stale_age_seconds": int(max(age_seconds, 0)),
+            "last_progress_at": last_progress_at,
+            "timestamp": reference_now.isoformat(),
+        }
+    )
+    return stale_progress
 
 
 def _entry_updated_after(kb_entry: dict | None, cutoff: datetime) -> bool:
@@ -1077,9 +1155,9 @@ class KnowledgeBaseManager:
         created_at = kb_config.get("created_at")
         updated_at = kb_config.get("updated_at")
 
-        live_status = status in {"initializing", "processing"}
+        live_status = status in _LIVE_KB_STATUSES
         if live_status and isinstance(progress, dict):
-            live_status = progress.get("stage") not in {"completed", "error"}
+            live_status = progress.get("stage") not in _TERMINAL_PROGRESS_STAGES
         effective_needs_reindex = needs_reindex and not live_status
 
         # KB might not have a directory yet if still initializing
@@ -1104,7 +1182,7 @@ class KnowledgeBaseManager:
                 "error": provider_error_summary,
             }
         elif (
-            status in {"processing", "initializing"}
+            status in _LIVE_KB_STATUSES
             and has_ready_provider
             and not (isinstance(progress, dict) and progress.get("stage") == "error")
         ):
@@ -1118,6 +1196,16 @@ class KnowledgeBaseManager:
             # See issue #418.
             status = "ready"
             progress = None
+            live_status = False
+        elif stale_progress := coerce_stale_progress_to_error(
+            status,
+            progress if isinstance(progress, dict) else None,
+            updated_at=updated_at,
+        ):
+            status = "error"
+            progress = stale_progress
+            live_status = False
+            effective_needs_reindex = needs_reindex
         elif not status and dir_exists:
             rag_storage_dir = kb_dir / "rag_storage"
             if has_ready_provider:

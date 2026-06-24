@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 
 from deeptutor.knowledge.manager import KnowledgeBaseManager
 from deeptutor.knowledge.progress_tracker import ProgressStage, ProgressTracker
@@ -56,3 +57,33 @@ def test_progress_tracker_get_progress_falls_back_to_config(tmp_path) -> None:
         "current": 3,
         "total": 5,
     }
+
+
+def test_manager_get_info_marks_stale_processing_progress_as_error(tmp_path) -> None:
+    kb_dir = tmp_path / "demo-kb"
+    (kb_dir / "raw").mkdir(parents=True)
+    old_timestamp = (datetime.now() - timedelta(hours=1)).isoformat()
+
+    manager = KnowledgeBaseManager(base_dir=str(tmp_path))
+    manager.update_kb_status(
+        name="demo-kb",
+        status="processing",
+        progress={
+            "stage": "processing_documents",
+            "message": "Embedding batches: 1/1",
+            "percent": 100,
+            "current": 1,
+            "total": 1,
+            "task_id": "kb_reindex_old",
+            "timestamp": old_timestamp,
+        },
+    )
+
+    info = manager.get_info("demo-kb")
+
+    assert info["status"] == "error"
+    assert info["statistics"]["status"] == "error"
+    assert info["progress"]["stage"] == "error"
+    assert info["progress"]["stale"] is True
+    assert info["progress"]["task_id"] == "kb_reindex_old"
+    assert "stale" in info["progress"]["message"].lower()

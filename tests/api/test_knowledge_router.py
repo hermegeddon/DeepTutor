@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 import importlib
 import json
 from pathlib import Path
@@ -466,6 +467,39 @@ def test_list_fallback_reports_error_status(monkeypatch, tmp_path: Path) -> None
     assert item["status"] == "error"
     assert item["progress"]["stage"] == "error"
     assert "get_info" in item["progress"]["error"]
+
+
+def test_progress_ws_closes_stale_expected_task(monkeypatch, tmp_path: Path) -> None:
+    base_dir = tmp_path / "knowledge_bases"
+    kb_dir = base_dir / "kb"
+    (kb_dir / "raw").mkdir(parents=True)
+    old_timestamp = (datetime.now() - timedelta(hours=1)).isoformat()
+    manager = knowledge_router_module.KnowledgeBaseManager(base_dir=str(base_dir))
+    manager.update_kb_status(
+        name="kb",
+        status="processing",
+        progress={
+            "stage": "processing_documents",
+            "message": "Embedding batches: 1/1",
+            "percent": 100,
+            "current": 1,
+            "total": 1,
+            "task_id": "kb_reindex_old",
+            "timestamp": old_timestamp,
+        },
+    )
+    monkeypatch.setattr(knowledge_router_module, "get_kb_manager", lambda: manager)
+
+    with TestClient(_build_app()) as client:
+        with client.websocket_connect(
+            "/api/v1/knowledge/kb/progress/ws?task_id=kb_reindex_old"
+        ) as websocket:
+            payload = websocket.receive_json()
+
+    assert payload["type"] == "progress"
+    assert payload["data"]["stage"] == "error"
+    assert payload["data"]["stale"] is True
+    assert payload["data"]["task_id"] == "kb_reindex_old"
 
 
 def _ready_kb_manager(tmp_path: Path, name: str = "kb") -> "_FakeKBManager":
