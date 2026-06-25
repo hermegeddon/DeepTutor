@@ -97,7 +97,7 @@ def test_graphrag_ready_requires_core_output_table(tmp_path: Path) -> None:
     assert probe.diagnostics["output_tables"] == ["entities"]
 
 
-def test_lightrag_uses_doc_status_as_truth(tmp_path: Path) -> None:
+def test_lightrag_requires_queryable_store_files(tmp_path: Path) -> None:
     version_dir = tmp_path / "version-1"
     version_dir.mkdir()
     _write_meta(version_dir, provider="lightrag")
@@ -129,6 +129,15 @@ def test_lightrag_uses_doc_status_as_truth(tmp_path: Path) -> None:
                 }
             }
         ),
+        encoding="utf-8",
+    )
+    probe = inspect_provider_index("lightrag", version_dir)
+    assert probe.ready is False
+    assert probe.doc_count == 1
+    assert "queryable chunk/vector stores" in probe.failure_summary
+
+    (version_dir / "vdb_chunks.json").write_text(
+        json.dumps({"vectors": [[1.0]]}),
         encoding="utf-8",
     )
     probe = inspect_provider_index("lightrag", version_dir)

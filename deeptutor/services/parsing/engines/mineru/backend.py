@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 _LOCAL_CLI_COMMANDS = ("magic-pdf", "mineru")
 
 
+def _path_cli_probe() -> dict[str, Any]:
+    for command in _LOCAL_CLI_COMMANDS:
+        path = shutil.which(command)
+        if path:
+            return {"found": True, "command": command, "path": path, "source": "path"}
+    return {"found": False, "command": "", "path": "", "source": "path"}
+
+
 def parse_pdf_to_workdir(
     pdf_path: str | Path,
     output_base: str | Path,
@@ -63,28 +71,43 @@ def parse_pdf_to_workdir(
 def local_cli_probe(configured_path: str = "") -> dict[str, Any]:
     """Fast (no-subprocess) check for a local MinerU CLI.
 
-    ``configured_path`` (the ``local_cli_path`` setting) takes precedence over
-    PATH lookup so MinerU can live in an isolated env (uv tool / pipx /
-    separate conda) without PATH games. Returns ``{found, command, path,
-    source}`` where ``source`` is ``"configured"`` or ``"path"``. Cheap enough
-    to run on every settings GET; the slower ``--version`` confirmation lives
-    in :func:`local_cli_version` and only runs behind the explicit Test button.
+    ``configured_path`` (the ``local_cli_path`` setting) takes precedence when
+    it points at an executable so MinerU can live in an isolated env (uv tool /
+    pipx / separate conda) without PATH games. If the configured path is stale
+    for the current runtime (for example a Windows host path inside a Docker
+    container), fall back to PATH auto-detection when available. Returns
+    ``{found, command, path, source}`` where ``source`` is ``"configured"`` or
+    ``"path"``. Fallback responses also include ``configured_path`` and
+    ``configured_path_missing`` so settings UIs can explain why PATH won.
+    Cheap enough to run on every settings GET; the slower ``--version``
+    confirmation lives in :func:`local_cli_version` and only runs behind the
+    explicit Test button.
     """
     configured = (configured_path or "").strip()
     if configured:
         candidate = Path(configured).expanduser()
         found = candidate.is_file() and os.access(candidate, os.X_OK)
+        if found:
+            return {
+                "found": True,
+                "command": candidate.name,
+                "path": str(candidate),
+                "source": "configured",
+            }
+        path_probe = _path_cli_probe()
+        if path_probe["found"]:
+            return {
+                **path_probe,
+                "configured_path": str(candidate),
+                "configured_path_missing": True,
+            }
         return {
-            "found": found,
+            "found": False,
             "command": candidate.name,
             "path": str(candidate),
             "source": "configured",
         }
-    for command in _LOCAL_CLI_COMMANDS:
-        path = shutil.which(command)
-        if path:
-            return {"found": True, "command": command, "path": path, "source": "path"}
-    return {"found": False, "command": "", "path": "", "source": "path"}
+    return _path_cli_probe()
 
 
 def local_cli_version(command: str, timeout: float = 60.0) -> str:

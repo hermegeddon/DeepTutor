@@ -690,6 +690,48 @@ def _matching_index_is_valid(kb_name: str, matching_version: dict | None) -> boo
         return False
 
 
+async def _progress_heartbeat(
+    progress_tracker: ProgressTracker,
+    *,
+    message: str,
+    current: int,
+    total: int,
+    interval_seconds: float = 60.0,
+) -> None:
+    """Keep long-running provider work from looking like a stale/dead task.
+
+    Graph-backed providers can spend many minutes inside a single library call
+    (chunking, LLM graph extraction, remote retries) without surfacing granular
+    callbacks. The KB list endpoint treats old progress snapshots as stale, so
+    refresh the timestamp while the background task is still alive.
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            progress_tracker.update(
+                ProgressStage.PROCESSING_DOCUMENTS,
+                message,
+                current=current,
+                total=total,
+            )
+        except Exception:
+            logger.debug(
+                "Progress heartbeat failed for '%s'",
+                progress_tracker.kb_name,
+                exc_info=True,
+            )
+
+
+async def _cancel_progress_heartbeat(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 async def run_initialization_task(initializer: KnowledgeBaseInitializer, task_id: str):
     """Background task for knowledge base initialization"""
     task_manager = TaskIDManager.get_instance()
@@ -707,7 +749,21 @@ async def run_initialization_task(initializer: KnowledgeBaseInitializer, task_id
 
             _task_log(task_id, f"Initializing knowledge base '{initializer.kb_name}'")
 
-            await initializer.process_documents()
+            raw_total = len(
+                FileTypeRouter.collect_supported_files(initializer.raw_dir, recursive=True)
+            )
+            heartbeat_task = asyncio.create_task(
+                _progress_heartbeat(
+                    initializer.progress_tracker,
+                    message="Knowledge base initialization is still running...",
+                    current=0,
+                    total=max(raw_total, 1),
+                )
+            )
+            try:
+                await initializer.process_documents()
+            finally:
+                await _cancel_progress_heartbeat(heartbeat_task)
             _task_log(task_id, "Document processing complete")
             _task_log(task_id, "Finalizing initialization")
             indexed_count = len(
@@ -2214,6 +2270,15 @@ async def run_reindex_task(kb_name: str, base_dir: str, task_id: str, signature_
                 total=len(file_paths),
             )
 
+            heartbeat_task = asyncio.create_task(
+                _progress_heartbeat(
+                    progress_tracker,
+                    message="Re-index is still running...",
+                    current=0,
+                    total=max(len(file_paths), 1),
+                )
+            )
+
             from deeptutor.services.rag.service import RAGService
 
             # provider=None → RAGService resolves the KB's DeepTutor-bound
@@ -2234,11 +2299,14 @@ async def run_reindex_task(kb_name: str, base_dir: str, task_id: str, signature_
             # rather than being swallowed into a generic wrapper. A False
             # return is reserved for "no documents to index" — surface that
             # specifically too.
-            success = await rag_service.initialize(
-                kb_name=kb_name,
-                file_paths=file_paths,
-                progress_callback=_on_progress,
-            )
+            try:
+                success = await rag_service.initialize(
+                    kb_name=kb_name,
+                    file_paths=file_paths,
+                    progress_callback=_on_progress,
+                )
+            finally:
+                await _cancel_progress_heartbeat(heartbeat_task)
             if not success:
                 raise RuntimeError(f"Re-index found no valid documents to index in '{kb_name}'.")
 

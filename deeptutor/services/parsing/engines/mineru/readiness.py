@@ -67,15 +67,25 @@ def mineru_readiness(config) -> ReadinessReport:
     # Local mode.
     from .backend import local_cli_probe
 
-    if not local_cli_probe(config.local_cli_path).get("found"):
-        return ReadinessReport(
-            ready=False,
-            reason="cli_missing",
-            message=(
+    cli_probe = local_cli_probe(config.local_cli_path)
+    if not cli_probe.get("found"):
+        if cli_probe.get("source") == "configured" and cli_probe.get("path"):
+            message = (
+                "Configured MinerU CLI path is not an executable file: "
+                f"{cli_probe['path']}. Fix it in Settings → Document Parsing, "
+                "clear it to auto-detect from PATH, or switch to text-only / "
+                "cloud / markitdown."
+            )
+        else:
+            message = (
                 "MinerU CLI not found. Install it (`pip install mineru`), set its "
                 "path in Settings → Document Parsing, or switch to text-only / "
                 "cloud / markitdown."
-            ),
+            )
+        return ReadinessReport(
+            ready=False,
+            reason="cli_missing",
+            message=message,
         )
 
     if config.allow_local_model_download or mineru_models_ready(config.model_download_source):

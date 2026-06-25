@@ -153,11 +153,52 @@ def test_local_cli_probe_configured_path_takes_precedence(
         "source": "configured",
     }
 
-    # A configured path that isn't an executable file reports not-found
-    # (no silent fallback to PATH — the admin asked for this exact binary).
+    # A configured path that isn't executable falls back to PATH when available.
+    # This keeps shared host/container settings usable: a host-specific path can
+    # be stale inside Docker while the container has its own server-local mineru.
+    probe = mineru_backend.local_cli_probe(str(tmp_path / "missing"))
+    assert probe == {
+        "found": True,
+        "command": "magic-pdf",
+        "path": "/usr/bin/magic-pdf",
+        "source": "path",
+        "configured_path": str(tmp_path / "missing"),
+        "configured_path_missing": True,
+    }
+
+    # If both the configured path and PATH lookup fail, preserve the configured
+    # path in the result so callers can show a precise remediation.
+    monkeypatch.setattr(mineru_backend.shutil, "which", lambda cmd: None)
     probe = mineru_backend.local_cli_probe(str(tmp_path / "missing"))
     assert probe["found"] is False
     assert probe["source"] == "configured"
+    assert probe["path"] == str(tmp_path / "missing")
+
+
+def test_parse_local_falls_back_to_path_when_configured_path_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from deeptutor.services.parsing.engines.mineru import local as pdf_parser
+
+    pdf = tmp_path / "exam.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    calls: dict[str, object] = {}
+
+    def fake_local(p: str, base: str, **kwargs) -> bool:  # noqa: ANN003
+        calls.update(kwargs)
+        (Path(base) / Path(p).stem).mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr(mineru_backend.shutil, "which", lambda cmd: "/usr/bin/mineru")
+    monkeypatch.setattr(pdf_parser, "parse_pdf_with_mineru", fake_local)
+
+    workdir = mineru_backend.parse_pdf_to_workdir(
+        pdf,
+        tmp_path / "out",
+        config=MinerUConfig(mode="local", local_cli_path=str(tmp_path / "nope")),
+    )
+    assert workdir == tmp_path / "out" / "exam"
+    assert calls["cli_command"] == "/usr/bin/mineru"
 
 
 def test_parse_local_rejects_bad_configured_path(
@@ -165,6 +206,7 @@ def test_parse_local_rejects_bad_configured_path(
 ) -> None:
     pdf = tmp_path / "exam.pdf"
     pdf.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(mineru_backend.shutil, "which", lambda cmd: None)
     with pytest.raises(MinerUError) as exc:
         mineru_backend.parse_pdf_to_workdir(
             pdf,

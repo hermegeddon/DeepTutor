@@ -123,6 +123,12 @@ def test_storage_meta_and_has_output(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
+    assert storage.has_output(root) is False
+    assert "queryable chunk/vector stores" in storage.failure_summary(root)
+
+    (root / "vdb_chunks.json").write_text(
+        json.dumps({"vectors": [[1.0]]}), encoding="utf-8"
+    )
     assert storage.has_output(root) is True
 
     storage.write_meta(root)

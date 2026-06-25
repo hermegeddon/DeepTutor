@@ -31,9 +31,11 @@ logger = logging.getLogger(__name__)
 META_FILENAME = "meta.json"
 PROVIDER = "lightrag"
 
-# Glob patterns LightRAG writes once it has actually built chunk/vector data.
-# A graphml file alone is not enough: LightRAG creates an empty graph at startup
-# before any document is successfully processed.
+# Glob patterns LightRAG writes once it has actually built queryable chunk/vector
+# data. A graphml file alone is not enough: LightRAG creates an empty graph at
+# startup before any document is successfully processed. Likewise,
+# kv_store_doc_status.json can say a document is ``processed`` even when graph
+# extraction timed out before LightRAG persisted any queryable stores.
 _OUTPUT_GLOBS = ("vdb_*.json", "kv_store_text_chunks.json")
 _DOC_STATUS_FILENAME = "kv_store_doc_status.json"
 _SUCCESS_STATUSES = {"processed", "completed", "done", "success", "indexed"}
@@ -57,25 +59,55 @@ def working_dir(root_dir: Path) -> Path:
 
 
 def has_output(root_dir: Path | None) -> bool:
-    """True when LightRAG has at least one successfully indexed document."""
+    """True when LightRAG has at least one queryable indexed document."""
     if root_dir is None:
         return False
     root = Path(root_dir)
     if not root.is_dir():
         return False
 
-    status_signal = _doc_status_has_success(root)
-    if status_signal is not None:
-        return status_signal
+    if not _has_queryable_output(root):
+        return False
 
+    # If doc status exists and only records failures, do not treat incidental
+    # store files as a good index. Missing/ambiguous doc status is tolerated
+    # because linked/external indexes may only have provider-owned artifacts.
+    status_signal = _doc_status_has_success(root)
+    return status_signal is not False
+
+
+def _has_queryable_output(root_dir: Path) -> bool:
     for pattern in _OUTPUT_GLOBS:
-        for path in root.glob(pattern):
+        for path in root_dir.glob(pattern):
             try:
-                if path.is_file() and path.stat().st_size > 2:
+                if path.is_file() and _json_file_has_records(path):
                     return True
             except OSError:
                 continue
     return False
+
+
+def _json_file_has_records(path: Path) -> bool:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        try:
+            return path.stat().st_size > 2
+        except OSError:
+            return False
+    return _payload_has_records(payload)
+
+
+def _payload_has_records(payload: Any) -> bool:
+    if isinstance(payload, list):
+        return len(payload) > 0
+    if isinstance(payload, dict):
+        for key in ("data", "vectors", "items", "records"):
+            if key in payload:
+                return _payload_has_records(payload[key])
+        return bool(payload)
+    return bool(payload)
 
 
 def _doc_status_has_success(root_dir: Path) -> bool | None:
@@ -103,23 +135,28 @@ def failure_summary(root_dir: Path | None, *, limit: int = 3) -> str:
     """Return a short human-readable summary of failed LightRAG documents."""
     if root_dir is None:
         return ""
-    payload = _read_doc_status(Path(root_dir))
-    if not payload:
-        return ""
+    root = Path(root_dir)
+    payload = _read_doc_status(root)
 
     failures: list[str] = []
-    for item in payload.values():
-        if not isinstance(item, dict):
-            continue
-        status = str(item.get("status") or "").lower()
-        error = str(item.get("error_msg") or "").strip()
-        if status not in _FAILED_STATUSES and not error:
-            continue
-        name = str(item.get("file_path") or "document").strip()
-        failures.append(f"{name}: {error or status}")
-        if len(failures) >= limit:
-            break
-    return "; ".join(failures)
+    if payload:
+        for item in payload.values():
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "").lower()
+            error = str(item.get("error_msg") or "").strip()
+            if status not in _FAILED_STATUSES and not error:
+                continue
+            name = str(item.get("file_path") or "document").strip()
+            failures.append(f"{name}: {error or status}")
+            if len(failures) >= limit:
+                break
+    if failures:
+        return "; ".join(failures)
+
+    if root.is_dir() and not _has_queryable_output(root):
+        return "LightRAG output is missing queryable chunk/vector stores."
+    return ""
 
 
 def document_error(root_dir: Path | None, doc_id: str) -> str:

@@ -244,6 +244,52 @@ def test_ready_lightrag_with_failed_doc_status_reports_error(
     assert info["statistics"]["index_versions"][0]["ready"] is False
 
 
+def test_ready_lightrag_with_processed_doc_but_missing_queryable_store_reports_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_active_embedding(monkeypatch)
+    kb_dir = tmp_path / "kb-lightrag-empty"
+    version_dir = kb_dir / "version-1"
+    version_dir.mkdir(parents=True)
+    (version_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "provider": "lightrag",
+                "signature": "lightrag",
+                "version": "version-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (version_dir / "kv_store_doc_status.json").write_text(
+        json.dumps(
+            {
+                "doc-1": {
+                    "status": "processed",
+                    "file_path": "ok.pdf",
+                    "chunks_list": ["chunk-1"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = KnowledgeBaseManager(base_dir=str(tmp_path))
+    manager.config.setdefault("knowledge_bases", {})["kb-lightrag-empty"] = {
+        "path": "kb-lightrag-empty",
+        "rag_provider": "lightrag",
+        "status": "ready",
+    }
+    manager._save_config()
+
+    info = KnowledgeBaseManager(base_dir=str(tmp_path)).get_info("kb-lightrag-empty")
+
+    assert info["status"] == "error"
+    assert info["progress"]["stage"] == "error"
+    assert "queryable chunk/vector stores" in info["progress"]["error"]
+    assert info["statistics"]["rag_initialized"] is False
+    assert info["statistics"]["index_versions"][0]["ready"] is False
+
+
 def test_needs_reindex_takes_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``effective_needs_reindex`` is checked first — promotion to ready
     must not run when the on-disk version was indexed under a different
