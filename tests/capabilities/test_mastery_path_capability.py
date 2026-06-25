@@ -132,24 +132,78 @@ def test_mastery_path_capability_manifest_is_registered() -> None:
     assert "mastery_build" in MasteryPathCapability.manifest.tools_used
 
 
-def test_resolve_mastery_path_id_prefers_metadata_override() -> None:
+def test_resolve_mastery_path_id_prefers_config_override() -> None:
     context = UnifiedContext(
         session_id="session-id",
-        metadata={"mastery_path_id": "acumatica:courses raw"},
+        config_overrides={"mastery_path_id": "config:id"},
+        metadata={
+            "mastery_path_id": "metadata-id",
+            "book_references": [{"book_id": "book-id"}],
+        },
+        knowledge_bases=["kb-id"],
     )
 
-    assert resolve_mastery_path_id(context) == "acumatica_courses_raw"
+    assert resolve_mastery_path_id(context) == "config_id"
 
 
-def test_resolve_mastery_path_id_falls_back_to_book_then_session() -> None:
-    from_book = UnifiedContext(
+def test_resolve_mastery_path_id_metadata_wins_over_books_kbs_and_session() -> None:
+    context = UnifiedContext(
+        session_id="session-id",
+        metadata={
+            "mastery_path_id": "metadata:id",
+            "book_references": [{"book_id": "book-id"}],
+        },
+        knowledge_bases=["kb-id"],
+    )
+
+    assert resolve_mastery_path_id(context) == "metadata_id"
+
+
+def test_resolve_mastery_path_id_book_references_win_over_kb_and_session() -> None:
+    from_book_dict = UnifiedContext(
         session_id="session-id",
         metadata={"book_references": [{"book_id": "book-id"}]},
+        knowledge_bases=["kb-id"],
     )
-    from_session = UnifiedContext(session_id="session-id")
+    from_book_string = UnifiedContext(
+        session_id="session-id",
+        metadata={"book_references": ["string-book"]},
+        knowledge_bases=["kb-id"],
+    )
 
-    assert resolve_mastery_path_id(from_book) == "book-id"
+    assert resolve_mastery_path_id(from_book_dict) == "book-id"
+    assert resolve_mastery_path_id(from_book_string) == "string-book"
+
+
+def test_resolve_mastery_path_id_uses_first_kb_before_session() -> None:
+    context = UnifiedContext(
+        session_id="session-id",
+        knowledge_bases=["acumatica-courses-lightrag", "ignored-kb"],
+    )
+
+    assert resolve_mastery_path_id(context) == "acumatica-courses-lightrag"
+
+
+def test_resolve_mastery_path_id_strips_prefixed_kb_ids() -> None:
+    from_admin_id = UnifiedContext(
+        session_id="session-id",
+        knowledge_bases=["admin:kb:acumatica-courses-lightrag"],
+    )
+    from_user_dict = UnifiedContext(
+        session_id="session-id",
+        knowledge_bases=[{"id": "user:kb:personal-path"}],
+    )
+
+    assert resolve_mastery_path_id(from_admin_id) == "acumatica-courses-lightrag"
+    assert resolve_mastery_path_id(from_user_dict) == "personal-path"
+
+
+def test_resolve_mastery_path_id_falls_back_to_session_then_default() -> None:
+    from_session = UnifiedContext(session_id="session-id")
+    from_default = UnifiedContext(session_id="")
+
     assert resolve_mastery_path_id(from_session) == "session-id"
+    assert resolve_mastery_path_id(from_default) == "default"
 
 
 def test_mastery_loop_nudges_toolless_first_finish() -> None:

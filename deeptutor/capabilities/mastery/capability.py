@@ -32,25 +32,57 @@ def _sanitize_path_id(raw: str) -> str:
     return cleaned or "default"
 
 
+def _candidate_from_book_ref(ref: object) -> str:
+    if isinstance(ref, str):
+        return ref.strip()
+    if isinstance(ref, dict):
+        return str(ref.get("book_id") or ref.get("id") or "").strip()
+    return ""
+
+
+def _strip_kb_ref_prefix(value: str) -> str:
+    candidate = value.strip()
+    marker = ":kb:"
+    if marker in candidate:
+        return candidate.split(marker, 1)[1].strip()
+    return candidate
+
+
+def _candidate_from_kb_ref(ref: object) -> str:
+    if isinstance(ref, str):
+        return _strip_kb_ref_prefix(ref)
+    if isinstance(ref, dict):
+        candidate = str(ref.get("name") or ref.get("id") or "").strip()
+        return _strip_kb_ref_prefix(candidate)
+    return ""
+
+
 def resolve_mastery_path_id(context: UnifiedContext) -> str:
     """Resolve which learner-path the turn operates on.
 
-    Prefers an explicit ``mastery_path_id`` set by the frontend (so the tutor
-    and the build wizard / dashboard agree on one storage key), then a book
-    reference, then the session id for an ad-hoc path built inside a chat.
+    Precedence is explicit public config, compatibility metadata, book
+    reference, first selected knowledge base, then the session id. This keeps
+    KB-named Mastery Paths deterministic for callers that only select a KB.
     """
-    explicit = str(context.metadata.get("mastery_path_id") or "").strip()
-    if explicit:
-        return _sanitize_path_id(explicit)
+    explicit_config = str((context.config_overrides or {}).get("mastery_path_id") or "").strip()
+    if explicit_config:
+        return _sanitize_path_id(explicit_config)
+
+    explicit_metadata = str((context.metadata or {}).get("mastery_path_id") or "").strip()
+    if explicit_metadata:
+        return _sanitize_path_id(explicit_metadata)
+
     refs = (context.metadata or {}).get("book_references", [])
     if refs:
-        ref = refs[0]
-        if isinstance(ref, str) and ref.strip():
-            return _sanitize_path_id(ref)
-        if isinstance(ref, dict):
-            candidate = str(ref.get("book_id") or ref.get("id") or "").strip()
-            if candidate:
-                return _sanitize_path_id(candidate)
+        candidate = _candidate_from_book_ref(refs[0])
+        if candidate:
+            return _sanitize_path_id(candidate)
+
+    if context.knowledge_bases:
+        candidate = _candidate_from_kb_ref(context.knowledge_bases[0])
+        if candidate:
+            return _sanitize_path_id(candidate)
+
     return _sanitize_path_id(str(context.session_id or "default"))
 
 

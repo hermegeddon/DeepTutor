@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from deeptutor.runtime.request_contracts import (
+    get_capability_request_schema,
     validate_capability_config,
     validate_chat_request_config,
 )
@@ -25,3 +26,17 @@ def test_chat_config_allows_subagent_consult_budget() -> None:
 def test_chat_config_still_rejects_unknown_keys() -> None:
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         validate_chat_request_config({"totally_unknown_key": 1})
+
+
+def test_mastery_path_config_accepts_public_path_id() -> None:
+    assert validate_capability_config(
+        "mastery_path", {"mastery_path_id": "acumatica-courses-lightrag"}
+    ) == {"mastery_path_id": "acumatica-courses-lightrag"}
+
+
+def test_mastery_path_schema_exposes_path_id_and_forbids_extra() -> None:
+    schema = get_capability_request_schema("mastery_path")
+
+    assert "mastery_path_id" in schema["properties"]
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        validate_capability_config("mastery_path", {"unknown": "nope"})

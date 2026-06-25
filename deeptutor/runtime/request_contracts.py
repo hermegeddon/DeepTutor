@@ -71,6 +71,12 @@ class VisualizeRequestConfig(BaseModel):
     style_hint: str = Field(default="", max_length=500)
 
 
+class MasteryPathRequestConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mastery_path_id: str = ""
+
+
 def _clean_public_config(raw_config: dict[str, Any] | None) -> dict[str, Any]:
     if raw_config is None:
         return {}
@@ -121,6 +127,12 @@ def validate_visualize_request_config(
     return _validate_model(VisualizeRequestConfig, raw_config, label="visualize")
 
 
+def validate_mastery_path_request_config(
+    raw_config: dict[str, Any] | None,
+) -> MasteryPathRequestConfig:
+    return _validate_model(MasteryPathRequestConfig, raw_config, label="mastery path")
+
+
 def build_request_schema(model_type: type[BaseModel]) -> dict[str, Any]:
     return model_type.model_json_schema(mode="validation")
 
@@ -131,6 +143,7 @@ CAPABILITY_CONFIG_VALIDATORS: dict[str, Callable[[dict[str, Any] | None], Any]] 
     "deep_question": validate_deep_question_request_config,
     "deep_research": validate_research_request_config,
     "math_animator": validate_math_animator_request_config,
+    "mastery_path": validate_mastery_path_request_config,
     "visualize": validate_visualize_request_config,
 }
 
@@ -140,6 +153,7 @@ CAPABILITY_REQUEST_SCHEMAS: dict[str, dict[str, Any]] = {
     "deep_question": build_request_schema(DeepQuestionRequestConfig),
     "deep_research": build_request_schema(DeepResearchRequestConfig),
     "math_animator": build_request_schema(MathAnimatorRequestConfig),
+    "mastery_path": build_request_schema(MasteryPathRequestConfig),
     "visualize": build_request_schema(VisualizeRequestConfig),
 }
 
@@ -166,6 +180,7 @@ __all__ = [
     "ChatRequestConfig",
     "DeepQuestionRequestConfig",
     "DeepSolveRequestConfig",
+    "MasteryPathRequestConfig",
     "VisualizeRequestConfig",
     "build_request_schema",
     "get_capability_request_schema",
@@ -173,5 +188,6 @@ __all__ = [
     "validate_chat_request_config",
     "validate_deep_question_request_config",
     "validate_deep_solve_request_config",
+    "validate_mastery_path_request_config",
     "validate_visualize_request_config",
 ]
