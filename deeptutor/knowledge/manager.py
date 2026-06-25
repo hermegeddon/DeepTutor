@@ -37,7 +37,6 @@ from deeptutor.services.rag.file_routing import FileTypeRouter
 from deeptutor.services.rag.index_probe import (
     inspect_kb_versions,
     inspect_provider_version,
-    provider_failure_summary,
 )
 
 logger = logging.getLogger(__name__)
@@ -344,7 +343,7 @@ class KnowledgeBaseManager:
 
         # Config file to track knowledge bases
         self.config_file = self.base_dir / "kb_config.json"
-        self.config = self._load_config()
+        self.config = self._load_config(reconcile=False)
 
         # PocketBase sync — enabled when integrations.pocketbase_url is set.
         # The local JSON file stays the source of truth; PocketBase gets a
@@ -353,7 +352,7 @@ class KnowledgeBaseManager:
 
         self._pb_enabled = is_pocketbase_enabled()
 
-    def _load_config(self) -> dict:
+    def _load_config(self, *, reconcile: bool = True) -> dict:
         """Load knowledge base configuration from the canonical kb_config.json file."""
         if self.config_file.exists():
             try:
@@ -403,23 +402,24 @@ class KnowledgeBaseManager:
                             kb_entry["needs_reindex"] = True
                             config_changed = True
 
-                    kb_dir = self.base_dir / kb_name
-                    legacy_storage = kb_dir / "rag_storage"
-                    has_llamaindex_index = has_ready_provider_index(kb_dir, DEFAULT_PROVIDER)
-                    if (
-                        provider == DEFAULT_PROVIDER
-                        and legacy_storage.exists()
-                        and legacy_storage.is_dir()
-                        and not has_llamaindex_index
-                    ):
-                        if not kb_entry.get("needs_reindex", False):
-                            kb_entry["needs_reindex"] = True
-                            config_changed = True
-                        if kb_entry.get("status") == "ready":
-                            kb_entry["status"] = "needs_reindex"
-                            config_changed = True
+                    if reconcile:
+                        kb_dir = self.base_dir / kb_name
+                        legacy_storage = kb_dir / "rag_storage"
+                        has_llamaindex_index = has_ready_provider_index(kb_dir, DEFAULT_PROVIDER)
+                        if (
+                            provider == DEFAULT_PROVIDER
+                            and legacy_storage.exists()
+                            and legacy_storage.is_dir()
+                            and not has_llamaindex_index
+                        ):
+                            if not kb_entry.get("needs_reindex", False):
+                                kb_entry["needs_reindex"] = True
+                                config_changed = True
+                            if kb_entry.get("status") == "ready":
+                                kb_entry["status"] = "needs_reindex"
+                                config_changed = True
 
-                if _reconcile_embedding_flags(knowledge_bases, self.base_dir):
+                if reconcile and _reconcile_embedding_flags(knowledge_bases, self.base_dir):
                     config_changed = True
 
                 if config_changed:
@@ -598,7 +598,7 @@ class KnowledgeBaseManager:
             "updated_at": kb_config.get("updated_at"),
         }
 
-    def list_knowledge_bases(self) -> list[str]:
+    def list_knowledge_bases(self, *, refresh: bool = True) -> list[str]:
         """List all available knowledge bases.
 
         This method:
@@ -608,8 +608,13 @@ class KnowledgeBaseManager:
         3. Scans the directory for existing KBs not yet registered
         4. Auto-registers discovered KBs with valid raw/index structure
         """
-        # Always reload config from file to ensure we have the latest data
-        self.config = self._load_config()
+        # Always reload config from file to ensure we have the latest data,
+        # unless the caller already loaded it and is building a batch view.
+        # The load path performs provider/embedding reconciliation, which is
+        # intentionally expensive; list endpoints should not repeat it once per
+        # row.
+        if refresh:
+            self.config = self._load_config()
 
         config_kbs = self.config.get("knowledge_bases", {})
         kb_list: set[str] = set()
@@ -1038,7 +1043,12 @@ class KnowledgeBaseManager:
         except Exception as e:
             logger.warning(f"Failed to save default to centralized config: {e}")
 
-    def get_default(self) -> str | None:
+    def get_default(
+        self,
+        *,
+        refresh: bool = True,
+        kb_names: list[str] | None = None,
+    ) -> str | None:
         """
         Get default knowledge base name.
 
@@ -1046,19 +1056,27 @@ class KnowledgeBaseManager:
         1. Canonical KB config service (`data/knowledge_bases/kb_config.json`)
         2. First knowledge base in the list (auto-fallback)
         """
+        if not refresh:
+            candidates = kb_names if kb_names is not None else self.list_knowledge_bases(refresh=False)
+            default_kb = (self.config.get("defaults") or {}).get("default_kb")
+            if default_kb and default_kb in candidates:
+                return default_kb
+            return candidates[0] if candidates else None
+
         # Try centralized config first
         try:
             from deeptutor.services.config import get_kb_config_service
 
             kb_config_service = get_kb_config_service()
             default_kb = kb_config_service.get_default_kb()
-            if default_kb and default_kb in self.list_knowledge_bases():
+            candidates = kb_names if kb_names is not None else self.list_knowledge_bases()
+            if default_kb and default_kb in candidates:
                 return default_kb
         except Exception:
             pass
 
         # Fallback to first knowledge base in sorted list
-        kb_list = self.list_knowledge_bases()
+        kb_list = kb_names if kb_names is not None else self.list_knowledge_bases()
         if kb_list:
             return kb_list[0]
 
@@ -1123,7 +1141,13 @@ class KnowledgeBaseManager:
 
         return {}
 
-    def get_info(self, name: str | None = None) -> dict:
+    def get_info(
+        self,
+        name: str | None = None,
+        *,
+        refresh: bool = True,
+        default_name: str | None = None,
+    ) -> dict:
         """Get detailed information about a knowledge base.
 
         This method:
@@ -1132,10 +1156,11 @@ class KnowledgeBaseManager:
         3. Falls back to metadata.json for legacy KBs
         4. Collects statistics about files and RAG status
         """
-        # Reload config to get latest status
-        self.config = self._load_config()
+        # Reload config to get latest status unless a batch caller already did.
+        if refresh:
+            self.config = self._load_config()
 
-        kb_name = name or self.get_default()
+        kb_name = name or default_name or self.get_default(refresh=refresh)
         if kb_name is None:
             raise ValueError("No knowledge base name provided and no default set")
 
@@ -1167,9 +1192,14 @@ class KnowledgeBaseManager:
         if dir_exists:
             index_versions = inspect_kb_versions(kb_dir, rag_provider)
             has_ready_provider = any(bool(version.get("ready")) for version in index_versions)
-        provider_error_summary = (
-            provider_failure_summary(kb_dir, rag_provider) if dir_exists else ""
-        )
+        provider_error_summary = ""
+        if dir_exists:
+            failures = [
+                str(version.get("failure_summary") or "").strip()
+                for version in index_versions
+                if str(version.get("failure_summary") or "").strip()
+            ]
+            provider_error_summary = "; ".join(failures[:3])
 
         # For old KBs without status field, determine status from rag_storage
         if effective_needs_reindex:
@@ -1262,7 +1292,8 @@ class KnowledgeBaseManager:
         info = {
             "name": kb_name,
             "path": str(kb_dir),
-            "is_default": kb_name == self.get_default(),
+            "is_default": kb_name
+            == (default_name if default_name is not None else self.get_default(refresh=refresh)),
             "metadata": metadata,
             "status": status,
             "progress": progress,

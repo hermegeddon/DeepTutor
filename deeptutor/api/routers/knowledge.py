@@ -1691,10 +1691,22 @@ def _list_knowledge_bases_sync():
     """Synchronous implementation for the heavy KB list/info scan."""
     try:
         manager = get_kb_manager()
-        kb_names = manager.list_knowledge_bases()
-        access_items = list_visible_kb_access()
+        try:
+            manager.config = manager._load_config(reconcile=False)
+        except TypeError:
+            manager.config = manager._load_config()
+        try:
+            kb_names = manager.list_knowledge_bases(refresh=False)
+        except TypeError:
+            kb_names = manager.list_knowledge_bases()
+        try:
+            default_name = manager.get_default(refresh=False, kb_names=kb_names)
+        except TypeError:
+            default_name = manager.get_default()
+        current_user = get_current_user()
+        access_items = [] if current_user.is_admin else list_visible_kb_access()
         access_by_id = {str(item.get("id") or ""): item for item in access_items}
-        own_prefix = "admin:kb:" if get_current_user().is_admin else "user:kb:"
+        own_prefix = "admin:kb:" if current_user.is_admin else "user:kb:"
 
         logger.debug(f"Found {len(kb_names)} knowledge bases: {kb_names}")
 
@@ -1703,7 +1715,10 @@ def _list_knowledge_bases_sync():
 
         for name in kb_names:
             try:
-                info = manager.get_info(name)
+                try:
+                    info = manager.get_info(name, refresh=False, default_name=default_name)
+                except TypeError:
+                    info = manager.get_info(name)
                 logger.debug(f"Successfully got info for KB '{name}': {info.get('statistics', {})}")
                 result.append(
                     KnowledgeBaseInfo(
@@ -1715,7 +1730,7 @@ def _list_knowledge_bases_sync():
                         path=info.get("path"),
                         status=info.get("status"),
                         progress=info.get("progress"),
-                        source="admin" if get_current_user().is_admin else "user",
+                        source="admin" if current_user.is_admin else "user",
                         assigned=False,
                         read_only=False,
                         provenance_label=access_by_id.get(f"{own_prefix}{info['name']}", {}).get(
@@ -1740,7 +1755,7 @@ def _list_knowledge_bases_sync():
                             KnowledgeBaseInfo(
                                 id=f"{own_prefix}{name}",
                                 name=name,
-                                is_default=name == manager.get_default(),
+                                is_default=name == default_name,
                                 statistics={
                                     "raw_documents": 0,
                                     "images": 0,
@@ -1751,7 +1766,7 @@ def _list_knowledge_bases_sync():
                                 path=str(kb_dir),
                                 status="error",
                                 progress=fallback_progress,
-                                source="admin" if get_current_user().is_admin else "user",
+                                source="admin" if current_user.is_admin else "user",
                             )
                         )
                 except Exception as fallback_err:
@@ -1768,7 +1783,7 @@ def _list_knowledge_bases_sync():
             )
 
         logger.debug(f"Returning {len(result)} knowledge bases")
-        if not get_current_user().is_admin:
+        if not current_user.is_admin:
             own_ids = {item.id for item in result}
             for access in access_items:
                 if access.get("source") != "admin" or access.get("id") in own_ids:
