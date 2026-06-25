@@ -1188,15 +1188,23 @@ async def update_graphrag_pipeline_config(payload: GraphRagConfigUpdate):
 
 
 class LightRagConfigUpdate(BaseModel):
-    """Partial update for LightRAG query knobs (omitted fields kept)."""
+    """Partial update for LightRAG query/indexing knobs (omitted fields kept)."""
 
     top_k: int | None = None
     response_type: str | None = None
+    indexing_max_async: int | None = None
+    indexing_timeout_seconds: int | None = None
+    embedding_max_async: int | None = None
+    embedding_timeout_seconds: int | None = None
+    chunk_token_size: int | None = None
+    chunk_overlap_token_size: int | None = None
+    entity_extract_max_gleaning: int | None = None
+    entity_extract_max_entities: int | None = None
 
 
 @router.get("/rag-pipelines/lightrag/config")
 async def get_lightrag_pipeline_config():
-    """Read LightRAG's query knobs (top_k, response style)."""
+    """Read LightRAG's query and indexing knobs."""
     try:
         from deeptutor.services.config import get_runtime_settings_service
 
@@ -1208,7 +1216,7 @@ async def get_lightrag_pipeline_config():
 
 @router.put("/rag-pipelines/lightrag/config")
 async def update_lightrag_pipeline_config(payload: LightRagConfigUpdate):
-    """Persist LightRAG's query knobs. Takes effect on the next query."""
+    """Persist LightRAG knobs. Query knobs apply immediately; indexing knobs apply on rebuild."""
     try:
         from deeptutor.services.config import get_runtime_settings_service
 
@@ -2332,23 +2340,16 @@ async def run_reindex_task(kb_name: str, base_dir: str, task_id: str, signature_
                     meta_err,
                 )
 
-            manager = get_kb_manager()
-            manager.update_kb_status(
-                name=kb_name,
-                status="ready",
-                progress={
-                    "stage": "completed",
-                    "message": "Re-index complete",
-                    "percent": 100,
-                    "current": len(file_paths),
-                    "total": len(file_paths),
-                    "task_id": task_id,
-                    "timestamp": completed_at,
-                    "indexed_count": len(file_paths),
-                    "index_changed": True,
-                    "index_action": "reindex",
-                },
+            progress_tracker.update(
+                ProgressStage.COMPLETED,
+                "Re-index complete",
+                current=len(file_paths),
+                total=len(file_paths),
+                indexed_count=len(file_paths),
+                index_changed=True,
+                index_action="reindex",
             )
+            manager = KnowledgeBaseManager(base_dir=str(base_path))
             # Clear the legacy mismatch / needs_reindex flags now that an
             # index version matching the active config exists on disk.
             kb_entry = manager.config.get("knowledge_bases", {}).get(kb_name) or {}
@@ -2514,13 +2515,48 @@ async def retry_knowledge_base(
         raise HTTPException(status_code=500, detail=format_exception_message(e))
 
 
+def _completed_progress_snapshot(kb_name: str) -> dict:
+    """Synthetic terminal progress for a KB that is already ready."""
+    return {
+        "kb_name": kb_name,
+        "stage": "completed",
+        "message": "Knowledge base is ready.",
+        "current": 1,
+        "total": 1,
+        "file_name": "",
+        "progress_percent": 100,
+        "percent": 100,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 @router.get("/{kb_name}/progress")
 async def get_progress(kb_name: str):
-    """Get initialization progress for a knowledge base"""
+    """Get initialization progress for a knowledge base."""
     try:
         resource = resolve_kb(kb_name)
         progress_tracker = ProgressTracker(resource.name, resource.base_dir)
         progress = progress_tracker.get_progress()
+
+        try:
+            status_snapshot = manager_for_resource(resource).get_kb_status(resource.name) or {}
+            status = str(status_snapshot.get("status") or "").lower()
+            config_progress = status_snapshot.get("progress")
+            if status == "ready":
+                if isinstance(progress, dict) and progress.get("stage") == "completed":
+                    return progress
+                return _completed_progress_snapshot(resource.name)
+            if status == "error" and isinstance(config_progress, dict):
+                return config_progress
+            stale_progress = coerce_stale_progress_to_error(
+                status,
+                progress if isinstance(progress, dict) else config_progress,
+                updated_at=status_snapshot.get("updated_at"),
+            )
+            if stale_progress is not None:
+                return stale_progress
+        except Exception:
+            logger.debug("Failed to normalize progress for '%s'", resource.name, exc_info=True)
 
         if progress is None:
             return {"status": "not_started", "message": "Initialization not started"}

@@ -758,6 +758,53 @@ def _coerce_optional_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _coerce_optional_nonnegative_float(value: Any) -> float | None:
+    """Parse a non-negative float from catalog values, returning ``None`` when unset."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _resolve_model_profile_int(
+    *,
+    key: str,
+    model: dict[str, Any] | None,
+    profile: dict[str, Any] | None,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    """Resolve an int knob from model first, profile second, then clamp."""
+    value = _coerce_optional_int((model or {}).get(key))
+    if value is None:
+        value = _coerce_optional_int((profile or {}).get(key))
+    if value is None:
+        return default
+    return max(minimum, min(value, maximum))
+
+
+def _resolve_model_profile_float(
+    *,
+    key: str,
+    model: dict[str, Any] | None,
+    profile: dict[str, Any] | None,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Resolve a float knob from model first, profile second, then clamp."""
+    value = _coerce_optional_nonnegative_float((model or {}).get(key))
+    if value is None:
+        value = _coerce_optional_nonnegative_float((profile or {}).get(key))
+    if value is None:
+        return default
+    return max(minimum, min(value, maximum))
+
+
 def _resolve_embedding_provider(
     *,
     hint: str | None,
@@ -823,6 +870,30 @@ def resolve_embedding_runtime_config(
     dimension = _resolve_embedding_dimension((model or {}).get("dimension") or 0, default=0)
     # ``None`` means "fall back to adapter heuristic".
     send_dimensions = _coerce_optional_bool((model or {}).get("send_dimensions"))
+    request_timeout = _resolve_model_profile_int(
+        key="request_timeout",
+        model=model,
+        profile=profile,
+        default=60,
+        minimum=1,
+        maximum=3600,
+    )
+    batch_size = _resolve_model_profile_int(
+        key="batch_size",
+        model=model,
+        profile=profile,
+        default=10,
+        minimum=1,
+        maximum=1024,
+    )
+    batch_delay = _resolve_model_profile_float(
+        key="batch_delay",
+        model=model,
+        profile=profile,
+        default=0.0,
+        minimum=0.0,
+        maximum=60.0,
+    )
 
     provider_pool = _collect_embedding_provider_pool(loaded)
     provider_name = _resolve_embedding_provider(
@@ -854,9 +925,9 @@ def resolve_embedding_runtime_config(
         extra_headers=extra_headers,
         dimension=dimension,
         send_dimensions=send_dimensions,
-        request_timeout=60,
-        batch_size=10,
-        batch_delay=0.0,
+        request_timeout=request_timeout,
+        batch_size=batch_size,
+        batch_delay=batch_delay,
     )
 
 

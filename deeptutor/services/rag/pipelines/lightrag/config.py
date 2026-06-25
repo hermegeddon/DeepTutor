@@ -82,6 +82,39 @@ def query_kwargs_from_settings() -> dict:
         return {}
 
 
+def index_kwargs_from_settings() -> dict:
+    """LightRAG constructor kwargs for app-managed local indexing.
+
+    RAG-Anything forwards these through its ``lightrag_kwargs`` bridge to
+    ``LightRAG(...)``. The defaults are conservative because DeepTutor often
+    points LightRAG at local or agent-backed OpenAI-compatible endpoints where
+    four concurrent graph-extraction workers can time out or saturate the
+    backend before any queryable stores are persisted.
+    """
+    try:
+        from deeptutor.services.config import load_lightrag_settings
+
+        settings = load_lightrag_settings()
+        return {
+            "llm_model_max_async": int(settings.get("indexing_max_async", 1)),
+            "default_llm_timeout": int(settings.get("indexing_timeout_seconds", 900)),
+            "embedding_func_max_async": int(settings.get("embedding_max_async", 2)),
+            "default_embedding_timeout": int(
+                settings.get("embedding_timeout_seconds", 120)
+            ),
+            "chunk_token_size": int(settings.get("chunk_token_size", 1800)),
+            "chunk_overlap_token_size": int(settings.get("chunk_overlap_token_size", 100)),
+            "entity_extract_max_gleaning": int(
+                settings.get("entity_extract_max_gleaning", 0)
+            ),
+            "entity_extract_max_entities": int(
+                settings.get("entity_extract_max_entities", 25)
+            ),
+        }
+    except Exception:
+        return {}
+
+
 def build_llm_model_func():
     """Wrap DeepTutor's unified LLM callable for LightRAG.
 
@@ -170,6 +203,7 @@ __all__ = [
     "is_lightrag_available",
     "normalize_mode",
     "query_kwargs_from_settings",
+    "index_kwargs_from_settings",
     "build_llm_model_func",
     "build_vision_model_func",
     "build_embedding_func",

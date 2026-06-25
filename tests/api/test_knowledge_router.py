@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -830,6 +831,53 @@ def test_retry_rejects_non_error_kb(monkeypatch, tmp_path: Path) -> None:
 
     assert response.status_code == 409
     assert "not in an error state" in response.json()["detail"]
+
+
+def test_progress_endpoint_does_not_return_stale_running_file_for_ready_kb(
+    monkeypatch, tmp_path: Path
+) -> None:
+    base_dir = tmp_path / "knowledge_bases"
+    kb_dir = base_dir / "ready-kb"
+    kb_dir.mkdir(parents=True)
+    manager = knowledge_router_module.KnowledgeBaseManager(base_dir=str(base_dir))
+    manager.update_kb_status(
+        "ready-kb",
+        "ready",
+        progress={
+            "stage": "completed",
+            "timestamp": datetime.now().isoformat(),
+            "indexed_count": 1,
+            "index_changed": True,
+            "index_action": "reindex",
+        },
+    )
+    (kb_dir / ".progress.json").write_text(
+        json.dumps(
+            {
+                "kb_name": "ready-kb",
+                "task_id": "old-task",
+                "stage": "processing_documents",
+                "message": "Re-index is still running...",
+                "current": 0,
+                "total": 1,
+                "progress_percent": 0,
+                "timestamp": (datetime.now() - timedelta(minutes=10)).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    resource = SimpleNamespace(name="ready-kb", base_dir=base_dir)
+    monkeypatch.setattr(knowledge_router_module, "resolve_kb", lambda _name: resource)
+    monkeypatch.setattr(knowledge_router_module, "manager_for_resource", lambda _resource: manager)
+
+    with TestClient(_build_app()) as client:
+        response = client.get("/api/v1/knowledge/ready-kb/progress")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stage"] == "completed"
+    assert payload["progress_percent"] == 100
+    assert payload["message"] == "Knowledge base is ready."
 
 
 def test_reindex_bypasses_existing_match_when_vectors_are_invalid(

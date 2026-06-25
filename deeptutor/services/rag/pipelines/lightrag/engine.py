@@ -23,6 +23,7 @@ from .config import (
     build_embedding_func,
     build_llm_model_func,
     build_vision_model_func,
+    index_kwargs_from_settings,
     normalize_mode,
     query_kwargs_from_settings,
 )
@@ -44,6 +45,7 @@ def build_rag(working_dir: Path) -> Any:
         llm_model_func=build_llm_model_func(),
         vision_model_func=build_vision_model_func(),
         embedding_func=build_embedding_func(),
+        lightrag_kwargs=index_kwargs_from_settings(),
     )
 
 

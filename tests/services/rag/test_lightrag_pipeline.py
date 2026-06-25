@@ -77,6 +77,42 @@ def test_is_lightrag_available_false_when_dependency_missing(monkeypatch) -> Non
     assert lr_config.is_lightrag_available() is False
 
 
+def test_build_rag_passes_index_kwargs(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeConfig:
+        def __init__(self, *, working_dir):
+            self.working_dir = working_dir
+
+    class FakeRagAnything:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    fake_module = types.ModuleType("raganything")
+    fake_module.RAGAnythingConfig = FakeConfig
+    fake_module.RAGAnything = FakeRagAnything
+    monkeypatch.setitem(sys.modules, "raganything", fake_module)
+    monkeypatch.setattr(engine, "build_llm_model_func", lambda: "llm")
+    monkeypatch.setattr(engine, "build_vision_model_func", lambda: "vision")
+    monkeypatch.setattr(engine, "build_embedding_func", lambda: "embedding")
+    monkeypatch.setattr(
+        engine,
+        "index_kwargs_from_settings",
+        lambda: {"llm_model_max_async": 1, "default_llm_timeout": 900},
+    )
+
+    engine.build_rag(tmp_path)
+
+    assert captured["llm_model_func"] == "llm"
+    assert captured["vision_model_func"] == "vision"
+    assert captured["embedding_func"] == "embedding"
+    assert captured["lightrag_kwargs"] == {
+        "llm_model_max_async": 1,
+        "default_llm_timeout": 900,
+    }
+    assert captured["config"].working_dir == str(tmp_path)
+
+
 # --------------------------------------------------------------------------- #
 # storage
 # --------------------------------------------------------------------------- #

@@ -32,9 +32,37 @@ def test_lightrag_defaults_and_clamp(tmp_path: Path) -> None:
     defaults = svc.load_lightrag()
     assert defaults["top_k"] == 60
     assert defaults["response_type"] == "Multiple Paragraphs"
+    assert defaults["indexing_max_async"] == 1
+    assert defaults["indexing_timeout_seconds"] == 900
+    assert defaults["embedding_max_async"] == 2
+    assert defaults["embedding_timeout_seconds"] == 120
+    assert defaults["chunk_token_size"] == 1800
+    assert defaults["chunk_overlap_token_size"] == 100
+    assert defaults["entity_extract_max_gleaning"] == 0
+    assert defaults["entity_extract_max_entities"] == 25
 
-    saved = svc.save_lightrag({"top_k": 9999})
+    saved = svc.save_lightrag(
+        {
+            "top_k": 9999,
+            "indexing_max_async": 99,
+            "indexing_timeout_seconds": 10,
+            "embedding_max_async": 99,
+            "embedding_timeout_seconds": 5,
+            "chunk_token_size": 128,
+            "chunk_overlap_token_size": 999,
+            "entity_extract_max_gleaning": 99,
+            "entity_extract_max_entities": 0,
+        }
+    )
     assert saved["top_k"] == 200  # clamped to max
+    assert saved["indexing_max_async"] == 8
+    assert saved["indexing_timeout_seconds"] == 60
+    assert saved["embedding_max_async"] == 16
+    assert saved["embedding_timeout_seconds"] == 30
+    assert saved["chunk_token_size"] == 256
+    assert saved["chunk_overlap_token_size"] == 255
+    assert saved["entity_extract_max_gleaning"] == 3
+    assert saved["entity_extract_max_entities"] == 1
     assert (tmp_path / "lightrag.json").exists()
 
     floored = svc.save_lightrag({"top_k": 0})

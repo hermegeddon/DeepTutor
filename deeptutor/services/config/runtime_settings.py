@@ -221,15 +221,24 @@ DEFAULT_GRAPHRAG_SETTINGS: dict[str, Any] = {
     "dynamic_community_selection": False,
 }
 
-# LightRAG retrieval knobs (HKUDS/LightRAG via RAG-Anything). ``top_k`` is the
-# number of entities/relations the query pulls; ``response_type`` mirrors
-# GraphRAG's. These ride into ``QueryParam`` via the engine's aquery() call;
-# wiring is defensive (an older RAG-Anything that rejects a kwarg degrades to a
-# mode-only query).
+# LightRAG knobs (HKUDS/LightRAG via RAG-Anything). ``top_k`` and
+# ``response_type`` ride into query-time ``QueryParam``. The indexing knobs ride
+# into LightRAG's constructor through RAG-Anything's ``lightrag_kwargs`` bridge.
+# Defaults are intentionally conservative for app-managed local LLM endpoints:
+# graph extraction is LLM-heavy, and parallel extract workers can easily saturate
+# a local/agent-backed OpenAI-compatible server.
 DEFAULT_LIGHTRAG_SETTINGS: dict[str, Any] = {
     "version": 1,
     "top_k": 60,
     "response_type": "Multiple Paragraphs",
+    "indexing_max_async": 1,
+    "indexing_timeout_seconds": 900,
+    "embedding_max_async": 2,
+    "embedding_timeout_seconds": 120,
+    "chunk_token_size": 1800,
+    "chunk_overlap_token_size": 100,
+    "entity_extract_max_gleaning": 0,
+    "entity_extract_max_entities": 25,
 }
 
 IGNORE_PROCESS_OVERRIDES_ENV = "DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES"
@@ -742,10 +751,36 @@ class RuntimeSettingsService:
         }
 
     def _normalize_lightrag(self, settings: dict[str, Any]) -> dict[str, Any]:
+        chunk_token_size = _coerce_clamped_int(
+            settings.get("chunk_token_size"), 1800, 256, 8192
+        )
+        chunk_overlap_token_size = _coerce_clamped_int(
+            settings.get("chunk_overlap_token_size"), 100, 0, max(0, chunk_token_size - 1)
+        )
         return {
             "version": 1,
             "top_k": _coerce_clamped_int(settings.get("top_k"), 60, 1, 200),
             "response_type": self._normalize_response_type(settings.get("response_type")),
+            "indexing_max_async": _coerce_clamped_int(
+                settings.get("indexing_max_async"), 1, 1, 8
+            ),
+            "indexing_timeout_seconds": _coerce_clamped_int(
+                settings.get("indexing_timeout_seconds"), 900, 60, 3600
+            ),
+            "embedding_max_async": _coerce_clamped_int(
+                settings.get("embedding_max_async"), 2, 1, 16
+            ),
+            "embedding_timeout_seconds": _coerce_clamped_int(
+                settings.get("embedding_timeout_seconds"), 120, 30, 600
+            ),
+            "chunk_token_size": chunk_token_size,
+            "chunk_overlap_token_size": chunk_overlap_token_size,
+            "entity_extract_max_gleaning": _coerce_clamped_int(
+                settings.get("entity_extract_max_gleaning"), 0, 0, 3
+            ),
+            "entity_extract_max_entities": _coerce_clamped_int(
+                settings.get("entity_extract_max_entities"), 25, 1, 100
+            ),
         }
 
     def _normalize_document_parsing(self, settings: dict[str, Any]) -> dict[str, Any]:

@@ -227,6 +227,93 @@ def test_embedding_send_dimensions_resolves_from_catalog() -> None:
     assert resolved.send_dimensions is True
 
 
+def test_embedding_runtime_knobs_resolve_model_before_profile() -> None:
+    catalog = _build_catalog(
+        embedding_profile={
+            "id": "embedding-p",
+            "name": "Embedding",
+            "binding": "ollama",
+            "base_url": "http://localhost:11434/api/embed",
+            "api_key": "",
+            "api_version": "",
+            "extra_headers": {},
+            "request_timeout": 120,
+            "batch_size": 8,
+            "batch_delay": 0.5,
+            "models": [
+                {
+                    "id": "embedding-m",
+                    "name": "m",
+                    "model": "bge-m3:latest",
+                    "dimension": "1024",
+                    "request_timeout": "600",
+                    "batch_size": "1",
+                    "batch_delay": "0",
+                }
+            ],
+        }
+    )
+
+    resolved = resolve_embedding_runtime_config(catalog=catalog)
+
+    assert resolved.request_timeout == 600
+    assert resolved.batch_size == 1
+    assert resolved.batch_delay == 0.0
+
+
+def test_embedding_runtime_knobs_fallback_and_clamp() -> None:
+    catalog = _build_catalog(
+        embedding_profile={
+            "id": "embedding-p",
+            "name": "Embedding",
+            "binding": "ollama",
+            "base_url": "http://localhost:11434/api/embed",
+            "api_key": "",
+            "api_version": "",
+            "extra_headers": {},
+            "request_timeout": "99999",
+            "batch_size": "99999",
+            "batch_delay": "99999",
+            "models": [
+                {
+                    "id": "embedding-m",
+                    "name": "m",
+                    "model": "bge-m3:latest",
+                    "dimension": "1024",
+                    "request_timeout": "bad",
+                    "batch_size": 0,
+                    "batch_delay": -1,
+                }
+            ],
+        }
+    )
+
+    resolved = resolve_embedding_runtime_config(catalog=catalog)
+
+    assert resolved.request_timeout == 3600
+    assert resolved.batch_size == 1024
+    assert resolved.batch_delay == 60.0
+
+
+def test_embedding_runtime_knobs_keep_defaults_for_invalid_values() -> None:
+    catalog = _build_catalog(
+        embedding_model={
+            "id": "embedding-m",
+            "name": "m",
+            "model": "text-embedding-3-large",
+            "request_timeout": "bad",
+            "batch_size": -1,
+            "batch_delay": "bad",
+        }
+    )
+
+    resolved = resolve_embedding_runtime_config(catalog=catalog)
+
+    assert resolved.request_timeout == 60
+    assert resolved.batch_size == 10
+    assert resolved.batch_delay == 0.0
+
+
 def test_embedding_custom_openai_sdk_uses_user_supplied_base_url() -> None:
     """Legacy `custom_openai_sdk` configs still resolve for backwards compatibility."""
     catalog = _build_catalog(
