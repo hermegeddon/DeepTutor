@@ -132,6 +132,31 @@ async def test_readonly_kb_tools_list_and_search_with_caps(
 
 
 @pytest.mark.asyncio
+async def test_readonly_kb_list_handles_empty_runtime_without_main_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from deeptutor.multi_user import grants, paths
+
+    project_root = tmp_path
+    admin_root = (project_root / "data").resolve()
+    monkeypatch.setattr(paths, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(paths, "ADMIN_WORKSPACE_ROOT", admin_root)
+    monkeypatch.setattr(paths, "USERS_ROOT", admin_root / "users")
+    monkeypatch.setattr(paths, "SYSTEM_ROOT", admin_root / "system")
+    monkeypatch.setattr(paths, "LEGACY_MULTI_USER_ROOT", project_root / "multi-user")
+    monkeypatch.setattr(paths, "_path_services", {})
+    monkeypatch.setattr(grants, "GRANTS_DIR", admin_root / "system" / "grants")
+    from deeptutor.multi_user import knowledge_access
+
+    knowledge_access._manager_for.cache_clear()
+
+    listed = await readonly_tools.list_knowledge_bases(include_path=False)
+
+    assert listed["ok"] is True
+    assert listed["data"]["knowledge_bases"] == []
+
+
+@pytest.mark.asyncio
 async def test_readonly_mastery_tools_do_not_create_missing_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

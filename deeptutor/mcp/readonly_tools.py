@@ -443,10 +443,165 @@ async def get_turn_trace(
         return _exception_error(exc)
 
 
-def _list_knowledge_bases_sync() -> list[Any]:
-    from deeptutor.api.routers.knowledge import _list_knowledge_bases_sync as list_sync
+def _kb_info_row(
+    *,
+    manager: Any,
+    name: str,
+    default_name: str | None,
+    resource_id: str,
+    source: str,
+    assigned: bool,
+    read_only: bool,
+    provenance_label: str | None = None,
+    available: bool = True,
+) -> dict[str, Any]:
+    try:
+        info = manager.get_info(name, refresh=False, default_name=default_name)
+        return {
+            "id": resource_id,
+            "name": str(info.get("name") or name),
+            "is_default": bool(info.get("is_default", name == default_name)),
+            "statistics": info.get("statistics") or {},
+            "metadata": info.get("metadata") or {},
+            "path": info.get("path"),
+            "status": info.get("status"),
+            "progress": info.get("progress"),
+            "source": source,
+            "assigned": assigned,
+            "read_only": read_only,
+            "provenance_label": provenance_label,
+            "available": available,
+        }
+    except Exception as exc:
+        kb_dir = getattr(manager, "base_dir", None)
+        path = str(kb_dir / name) if kb_dir is not None else None
+        return {
+            "id": resource_id,
+            "name": name,
+            "is_default": name == default_name,
+            "statistics": {},
+            "metadata": {"name": name, "last_error": str(exc)},
+            "path": path,
+            "status": "error",
+            "progress": {
+                "stage": "error",
+                "message": "Failed to load knowledge base info.",
+                "error": str(exc),
+            },
+            "source": source,
+            "assigned": assigned,
+            "read_only": read_only,
+            "provenance_label": provenance_label,
+            "available": available,
+        }
 
-    return list_sync()
+
+def _list_manager_kbs_sync(
+    *, manager: Any, prefix: str, source: str, assigned: bool, read_only: bool
+) -> list[dict[str, Any]]:
+    try:
+        manager.config = manager._load_config(reconcile=False)
+    except TypeError:
+        manager.config = manager._load_config()
+    try:
+        kb_names = manager.list_knowledge_bases(refresh=False)
+    except TypeError:
+        kb_names = manager.list_knowledge_bases()
+    try:
+        default_name = manager.get_default(refresh=False, kb_names=kb_names)
+    except TypeError:
+        default_name = manager.get_default()
+    return [
+        _kb_info_row(
+            manager=manager,
+            name=name,
+            default_name=default_name,
+            resource_id=f"{prefix}{name}",
+            source=source,
+            assigned=assigned,
+            read_only=read_only,
+            provenance_label="Admin workspace" if source == "admin" and not assigned else None,
+        )
+        for name in kb_names
+    ]
+
+
+def _list_knowledge_bases_sync() -> list[Any]:
+    """List visible KBs without importing the heavy FastAPI knowledge router.
+
+    The API route module imports document parsing dependencies (openpyxl/numpy)
+    and loads ``main.yaml`` at import time.  Under stdio MCP on Windows that
+    import can hang long enough for callers to time out before returning the
+    same error envelope the direct tool path would produce.  The read-only MCP
+    surface only needs service-layer KB summaries, so use the multi-user access
+    layer and KnowledgeBaseManager directly.
+    """
+    from deeptutor.multi_user.context import get_current_user
+    from deeptutor.multi_user.knowledge_access import (
+        ADMIN_PREFIX,
+        USER_PREFIX,
+        admin_kb_manager,
+        current_kb_manager,
+        list_visible_knowledge_bases,
+        manager_for_resource,
+        resolve_kb,
+    )
+
+    user = get_current_user()
+    if user.is_admin:
+        return _list_manager_kbs_sync(
+            manager=admin_kb_manager(),
+            prefix=ADMIN_PREFIX,
+            source="admin",
+            assigned=False,
+            read_only=False,
+        )
+
+    rows = _list_manager_kbs_sync(
+        manager=current_kb_manager(),
+        prefix=USER_PREFIX,
+        source="user",
+        assigned=False,
+        read_only=False,
+    )
+    own_ids = {str(row.get("id") or "") for row in rows}
+    for access in list_visible_knowledge_bases():
+        resource_id = str(access.get("id") or "")
+        if not access.get("assigned") or resource_id in own_ids:
+            continue
+        if not access.get("available", True):
+            rows.append(
+                {
+                    "id": resource_id,
+                    "name": str(access.get("name") or ""),
+                    "is_default": False,
+                    "statistics": {},
+                    "metadata": {},
+                    "path": None,
+                    "status": "unavailable",
+                    "progress": None,
+                    "source": str(access.get("source") or "admin"),
+                    "assigned": True,
+                    "read_only": True,
+                    "provenance_label": str(access.get("provenance_label") or ""),
+                    "available": False,
+                }
+            )
+            continue
+        resource = resolve_kb(resource_id or str(access.get("name") or ""))
+        rows.append(
+            _kb_info_row(
+                manager=manager_for_resource(resource),
+                name=resource.name,
+                default_name=None,
+                resource_id=resource.id,
+                source=resource.source,
+                assigned=True,
+                read_only=True,
+                provenance_label=str(access.get("provenance_label") or ""),
+            )
+        )
+    return rows
 
 
 async def list_knowledge_bases(
