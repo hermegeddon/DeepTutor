@@ -31,10 +31,20 @@ _SECRET_KEY_RE = re.compile(
     r"(^|_)(api[_-]?key|token|secret|password|passwd|authorization|auth[_-]?header|bearer)($|_)",
     re.IGNORECASE,
 )
-_SECRET_VALUE_RE = re.compile(
-    r"(Bearer\s+)[A-Za-z0-9._~+\-/]+=*|\b(sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,})\b",
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"\b(api[_-]?key|token|secret|password|passwd|authorization|auth[_-]?header)"
+    r"(\s*[:=]\s*)"
+    r"((?:Bearer\s+)?[^\s,;]+)",
     re.IGNORECASE,
 )
+_SECRET_VALUE_RE = re.compile(
+    r"(Bearer\s+)[A-Za-z0-9._~+\-/]+=*"
+    r"|\b(sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,})\b"
+    r"|\b(?=[A-Za-z0-9_:-]{16,}\b)(?=[A-Za-z0-9_:-]*(?:secret|token|auth))"
+    r"[A-Za-z0-9_:-]+\b",
+    re.IGNORECASE,
+)
+_INTERNAL_ERROR_MESSAGE = "Internal error while handling read-only MCP tool request."
 
 
 def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
@@ -68,6 +78,17 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _redact_text(value: str) -> str:
+    value = _SECRET_ASSIGNMENT_RE.sub(
+        lambda m: f"{m.group(1)}{m.group(2)}[redacted]",
+        value,
+    )
+    return _SECRET_VALUE_RE.sub(
+        lambda m: f"{m.group(1)}[redacted]" if m.group(1) else "[redacted]",
+        value,
+    )
+
+
 def _redact(value: Any) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
@@ -81,10 +102,7 @@ def _redact(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact(item) for item in value]
     if isinstance(value, str):
-        return _SECRET_VALUE_RE.sub(
-            lambda m: f"{m.group(1)}[redacted]" if m.group(1) else "[redacted]",
-            value,
-        )
+        return _redact_text(value)
     return value
 
 
@@ -101,7 +119,7 @@ def _error(code: str, message: str, details: dict[str, Any] | None = None) -> di
         "ok": False,
         "error": {
             "code": code,
-            "message": str(message),
+            "message": _redact_text(str(message)),
             "details": _redact(_json_safe(details or {})),
         },
     }
@@ -116,7 +134,7 @@ def _exception_error(exc: Exception) -> dict[str, Any]:
         return _error("forbidden", str(detail or exc))
     if status_code == 400:
         return _error("invalid_argument", str(detail or exc))
-    return _error("internal_error", str(detail or exc))
+    return _error("internal_error", _INTERNAL_ERROR_MESSAGE)
 
 
 def _imported_session(row: dict[str, Any], explicit: bool | None = None) -> bool:

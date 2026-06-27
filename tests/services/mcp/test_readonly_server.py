@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,26 @@ from deeptutor.learning.storage import LearningStore
 from deeptutor.mcp import readonly_tools
 from deeptutor.mcp.readonly_server import create_server
 from deeptutor.services.session.sqlite_store import SQLiteSessionStore
+
+
+_SYNTHETIC_INTERNAL_MESSAGE = (
+    "internal auth detail SYNTHETIC_AUTH_MARKER_NOT_SECRET_123; "
+    "path=C:/Users/Janusz/.deeptutor/private/token.txt; "
+    "authorization=Bearer abcdef1234567890"
+)
+
+
+def _assert_internal_error_is_sanitized(result: dict[str, object]) -> None:
+    assert result["ok"] is False
+    error = result["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "internal_error"
+    assert "internal" in str(error["message"]).lower()
+
+    rendered = json.dumps(result)
+    assert "SYNTHETIC_AUTH_MARKER_NOT_SECRET_123" not in rendered
+    assert "C:/Users/Janusz/.deeptutor/private/token.txt" not in rendered
+    assert "abcdef1234567890" not in rendered
 
 
 @pytest.mark.asyncio
@@ -77,6 +98,46 @@ async def test_readonly_session_tools_return_capped_session_and_trace(
 
 
 @pytest.mark.asyncio
+async def test_readonly_session_internal_errors_do_not_leak_exception_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExplodingSessionStore:
+        async def get_session_with_messages(self, _session_id: str) -> None:
+            raise RuntimeError(_SYNTHETIC_INTERNAL_MESSAGE)
+
+    monkeypatch.setattr(readonly_tools, "get_session_store", lambda: ExplodingSessionStore())
+
+    result = await readonly_tools.get_session("session-demo")
+
+    _assert_internal_error_is_sanitized(result)
+
+
+@pytest.mark.asyncio
+async def test_readonly_expected_error_messages_are_redacted_but_specific(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExpectedNotFoundError(Exception):
+        status_code = 404
+        detail = "Session not found for token=sk-testcredential123456"
+
+    class MissingSessionStore:
+        async def get_session_with_messages(self, _session_id: str) -> None:
+            raise ExpectedNotFoundError()
+
+    monkeypatch.setattr(readonly_tools, "get_session_store", lambda: MissingSessionStore())
+
+    result = await readonly_tools.get_session("session-demo")
+
+    assert result["ok"] is False
+    error = result["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "not_found"
+    assert "Session not found" in str(error["message"])
+    assert "sk-testcredential123456" not in str(error["message"])
+    assert "[redacted]" in str(error["message"])
+
+
+@pytest.mark.asyncio
 async def test_readonly_kb_tools_list_and_search_with_caps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -129,6 +190,20 @@ async def test_readonly_kb_tools_list_and_search_with_caps(
     assert search["data"]["content_truncated"] is True
     assert len(search["data"]["sources"]) == 1
     assert "answer" not in search["data"]
+
+
+@pytest.mark.asyncio
+async def test_readonly_kb_internal_errors_do_not_leak_exception_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def explode() -> list[dict[str, object]]:
+        raise RuntimeError(_SYNTHETIC_INTERNAL_MESSAGE)
+
+    monkeypatch.setattr(readonly_tools, "_list_knowledge_bases_sync", explode)
+
+    result = await readonly_tools.list_knowledge_bases()
+
+    _assert_internal_error_is_sanitized(result)
 
 
 @pytest.mark.asyncio
