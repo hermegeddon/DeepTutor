@@ -40,6 +40,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _api_cwd(value: object) -> str:
+    """Serialize cwd values consistently for the HTTP API.
+
+    Path validators may return platform-native ``Path`` objects. On Windows,
+    ``str(Path('/tmp'))`` becomes ``'\\tmp'``; the API and frontend treat cwd as
+    a user-facing path string, so emit forward-slash form while still accepting
+    the same value for subprocess cwd later.
+    """
+    if not value:
+        return ""
+    as_posix = getattr(value, "as_posix", None)
+    if callable(as_posix):
+        return str(as_posix())
+    return str(value).replace("\\", "/")
+
+
 class ConnectSubagentRequest(BaseModel):
     name: str
     agent_kind: str
@@ -118,7 +134,7 @@ async def list_connections():
             {
                 "name": name,
                 "agent_kind": meta.get("agent_kind", ""),
-                "cwd": meta.get("cwd", ""),
+                "cwd": _api_cwd(meta.get("cwd", "")),
                 "partner_id": meta.get("partner_id", ""),
                 "description": meta.get("description", ""),
                 "created_at": meta.get("created_at"),
@@ -165,7 +181,7 @@ async def create_connection(payload: ConnectSubagentRequest):
         raw_cwd = (payload.cwd or "").strip()
         if raw_cwd:
             try:
-                resolved_cwd = str(assert_path_allowed(raw_cwd))
+                resolved_cwd = _api_cwd(assert_path_allowed(raw_cwd))
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -184,7 +200,7 @@ async def create_connection(payload: ConnectSubagentRequest):
         "status": "connected",
         "name": name,
         "agent_kind": entry["agent_kind"],
-        "cwd": entry["cwd"],
+        "cwd": _api_cwd(entry["cwd"]),
         "partner_id": entry.get("partner_id", ""),
     }
 
@@ -235,7 +251,7 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
     from deeptutor.services.subagent.sessions import get_session, remember_session, session_key
 
     kind = str(meta.get("agent_kind") or "")
-    cwd = str(meta.get("cwd") or "")
+    cwd = _api_cwd(meta.get("cwd") or "")
     partner_id = str(meta.get("partner_id") or "")
     backend = get_backend(kind)
     if backend is None:
