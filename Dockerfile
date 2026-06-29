@@ -212,31 +212,52 @@ RUN mkdir -p \
     data/user/logs \
     data/knowledge_bases
 
-# Bake a non-root user for the supervisord programs. supervisord runs as
-# root (PID 1) and drops each child to this user via the per-program
-# `user=deeptutor` directive, so the backend/frontend processes stay
-# non-root. UID 1000 matches the host user under rootless podman's
-# `userns_mode: keep-id` with a bind mount on ./data.
+# Bake a non-root user (UID 1000) for the supervisord programs. supervisord
+# itself runs as PID 1's UID — root under rootful Docker/Podman, or UID 1000
+# under rootless podman + `userns_mode: keep-id` (where PID 1 is the host
+# user). Each child (backend/frontend) is dropped to this `deeptutor` user via
+# the per-program `user=deeptutor` directive, so the app processes stay
+# non-root in either runtime. UID 1000 also matches the host user under
+# keep-id with a bind mount on ./data.
 RUN groupadd --system --gid 1000 deeptutor \
     && useradd --system --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin deeptutor \
     && chown -R deeptutor:deeptutor /app/data /app/web/.next
 
-# Create supervisord configuration for running both services.
-# The entrypoint runs supervisord as the unprivileged `deeptutor` user, so keep
-# supervisor-owned files under /tmp. Docker Desktop / Rancher Desktop can expose
-# /dev/fd/1 and /dev/fd/2 as root-owned pipes, which supervisor cannot reopen
-# after dropping privileges; child process logs therefore also go to /tmp while
-# the application keeps its normal persistent logs under data/user/logs.
+# supervisord config is split into two files so the production and development
+# images share one daemon-level [supervisord] section instead of duplicating it:
+#   - /etc/supervisor/supervisord.conf      — daemon-level settings (shared)
+#   - /etc/supervisor/conf.d/programs.conf  — the backend/frontend programs
+# Production defines the programs here; the development stage overrides only
+# programs.conf, leaving the shared daemon section untouched. Child process logs
+# go to /tmp because Docker Desktop / Rancher Desktop can expose /dev/fd/1 and
+# /dev/fd/2 as root-owned pipes that unprivileged child processes cannot reopen;
+# the application still keeps its normal persistent logs under data/user/logs.
 RUN mkdir -p /etc/supervisor/conf.d
 
-RUN cat > /etc/supervisor/conf.d/deeptutor.conf <<'EOF'
+# Daemon-level config. No `user=` in [supervisord]: supervisord runs as PID 1's
+# UID (root under rootful; UID 1000 under rootless podman + keep-id, which has
+# no CAP_SETUID and would make a `user=` line fail at startup with
+# "Can't drop privilege as nonroot user" — see supervisord options.py). The
+# pidfile lives in /tmp, which is world-writable, so supervisord can create it
+# whether it runs as root or UID 1000; /var/run is root-owned and not writable
+# by UID 1000 under rootless keep-id.
+RUN cat > /etc/supervisor/supervisord.conf <<'EOF'
 [supervisord]
 nodaemon=true
 logfile=/dev/null
 logfile_maxbytes=0
-pidfile=/var/run/supervisord.pid
-user=root
+pidfile=/tmp/supervisord.pid
 
+[include]
+files = /etc/supervisor/conf.d/programs.conf
+EOF
+
+RUN sed -i 's/\r$//' /etc/supervisor/supervisord.conf
+
+# Program definitions (production). Each child drops to the unprivileged
+# deeptutor user (UID 1000) via per-program `user=deeptutor`; see the note on
+# the user= design above the daemon config.
+RUN cat > /etc/supervisor/conf.d/programs.conf <<'EOF'
 [program:backend]
 command=/bin/bash /app/start-backend.sh
 directory=/app
@@ -263,7 +284,7 @@ stderr_logfile_maxbytes=0
 environment=NODE_ENV="production"
 EOF
 
-RUN sed -i 's/\r$//' /etc/supervisor/conf.d/deeptutor.conf
+RUN sed -i 's/\r$//' /etc/supervisor/conf.d/programs.conf
 
 # Create backend startup script
 RUN cat > /app/start-backend.sh <<'EOF'
@@ -394,19 +415,12 @@ echo "   - data/user/settings/main.yaml"
 echo "   - data/user/settings/agents.yaml"
 echo "============================================"
 
-# Run supervisord as root so it can open the container's stdout/stderr
-# (/dev/fd/1,2 — root-owned pipes under a rootful daemon like Docker Desktop)
-# and write its pidfile under /var/run. The backend and frontend programs are
-# dropped to the unprivileged deeptutor user (UID 1000) via `user=deeptutor`
-# in the supervisord config, so the app processes stay non-root.
-#
-# Dropping supervisord ITSELF to UID 1000 here (the previous
-# `exec gosu deeptutor ...`) worked under rootless podman — where UID 1000 is
-# the mapped host user that owns those FDs — but under a rootful daemon it
-# could not open /dev/fd/1,2 ("making dispatchers ... EACCES") nor the pidfile,
-# so neither service ever started. Per-program `user=` keeps the children
-# unprivileged in both runtimes without that breakage.
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/deeptutor.conf
+# Hand off to supervisord as PID 1. The daemon-level config deliberately omits
+# `user=` so supervisord inherits PID 1's UID and stays portable across rootful
+# and rootless-keep-id runtimes; children drop to the deeptutor user via
+# per-program `user=`. Full rationale lives next to the [supervisord] section
+# in the build step that writes /etc/supervisor/supervisord.conf.
+exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
 EOF
 
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
@@ -479,17 +493,11 @@ RUN pip install --no-cache-dir \
     black \
     ruff
 
-# Override supervisord config for development (with reload).
-# Keep supervisor-owned files under /tmp for the same unprivileged-runtime
-# reason as the production config above.
-RUN cat > /etc/supervisor/conf.d/deeptutor.conf <<'EOF'
-[supervisord]
-nodaemon=true
-logfile=/dev/null
-logfile_maxbytes=0
-pidfile=/var/run/supervisord.pid
-user=root
-
+# Development overrides only the program definitions (uvicorn --reload and
+# `next dev`); the shared daemon-level /etc/supervisor/supervisord.conf from
+# the production stage is reused as-is. Program logs stay under /tmp for the
+# same unprivileged-child compatibility reason as the production programs.
+RUN cat > /etc/supervisor/conf.d/programs.conf <<'EOF'
 [program:backend]
 command=python -m uvicorn deeptutor.api.main:app --host 0.0.0.0 --port %(ENV_BACKEND_PORT)s --reload --no-access-log
 directory=/app
@@ -516,7 +524,7 @@ stderr_logfile_maxbytes=0
 environment=NODE_ENV="development"
 EOF
 
-RUN sed -i 's/\r$//' /etc/supervisor/conf.d/deeptutor.conf
+RUN sed -i 's/\r$//' /etc/supervisor/conf.d/programs.conf
 
 # Development ports
 EXPOSE 8001 3782

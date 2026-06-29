@@ -491,7 +491,7 @@ data/
 
 **第一个注册用户成为管理员**，拥有模型目录、提供商凭证、共享知识库、技能和用户授权的管理权。其他所有人获得隔离的工作区和删减版的 Settings 页面 — 管理员分配的模型、知识库和技能以作用域只读选项的形式出现，原始 API Key 不可见。
 
-**启用方式：** 在 `data/user/settings/auth.json` 中开启认证，重启 `deeptutor start`，在 `/register` 注册第一个管理员，然后从 `/admin/users` 添加用户，并通过授权分配模型、知识库、技能、工具/MCP 策略和代码执行权限。
+**启用方式：** 在 `data/user/settings/auth.json` 中开启认证，重启 `deeptutor start`，在 `/register` 注册第一个管理员，然后从 `/admin/users` 添加用户，并通过授权分配模型、知识库、技能、Partner、工具/MCP 策略和代码执行权限。
 
 > PocketBase 仍为单用户集成 — 多用户部署时请将 `integrations.pocketbase_url` 留空，除非你已接入外部用户存储。
 

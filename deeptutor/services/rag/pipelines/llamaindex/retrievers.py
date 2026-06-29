@@ -42,9 +42,25 @@ def _set_similarity_top_k(retriever: Any, top_k: int) -> Any:
     return retriever
 
 
+def _corpus_size(index: Any) -> int | None:
+    """Best-effort count of indexed nodes (the BM25 corpus size)."""
+    docstore = getattr(index, "docstore", None)
+    docs = getattr(docstore, "docs", None)
+    if isinstance(docs, dict):
+        return len(docs)
+    return None
+
+
 def build_bm25_retriever(index: Any, storage_dir: Path, *, top_k: int) -> Any | None:
     """Build or load LlamaIndex's official BM25 retriever if available."""
     top_k = max(1, int(top_k))
+    # BM25 raises ("k of N is larger than the number of available scores") when
+    # similarity_top_k exceeds the corpus size — so a small knowledge base (e.g. a
+    # single short document) would crash hybrid retrieval at query time. Clamp to
+    # the node count so it returns what it has instead of erroring.
+    corpus_size = _corpus_size(index)
+    if corpus_size:
+        top_k = min(top_k, corpus_size)
     bm25_cls = _import_bm25_retriever()
     if bm25_cls is None:
         logger.info(
